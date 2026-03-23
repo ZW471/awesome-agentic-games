@@ -4,6 +4,52 @@ An **agentic game** is a game defined entirely by `.md` files (and optionally Py
 
 ---
 
+## Creating a New Game — Agent Workflow
+
+When a player asks an agent to **create a new agentic game**, the agent must follow this workflow. Do not jump straight into file generation — plan first, confirm with the player, then build.
+
+### Step 1: Generate a Draft Plan
+
+Based on the player's initial request (which may be vague, e.g., "make me a space exploration game"), the agent produces a structured plan covering:
+
+- **Genre & premise** — What kind of game is this? What's the core fantasy?
+- **Core mechanics** — Turn structure, combat/skill checks, resource systems, progression.
+- **World structure** — How many regions/levels/areas? Linear or open?
+- **Player character** — Class system? Stats? Abilities? How much customization?
+- **NPCs & companions** — Key characters, disposition system, companion mechanics.
+- **Win/loss conditions** — How does the game end? Is there permadeath?
+- **Session file schema** — What files go in `session/`? What does each track?
+- **Tools needed** — Dice roller? Random tables? Map generator?
+- **Estimated scope** — How many files need to be created?
+
+### Step 2: Ask the Player for Specifications
+
+Present the draft plan and ask the player to confirm, modify, or expand. Specifically ask about:
+
+1. **Theme & tone** — Dark and gritty? Lighthearted? Comedic? Epic?
+2. **Complexity preference** — Simple (few mechanics, fast turns) or deep (many systems, tactical)?
+3. **Difficulty settings** — What difficulty modes? What do they change?
+4. **Narrative style** — Terse? Verbose? Player's choice?
+5. **Any specific mechanics or features** they want included or excluded.
+6. **TUI viewer** — Does the player want a Terminal UI dashboard for viewing game state? (See `tui_template.md` for details.) If yes, the agent should generate `tui_viewer.py` alongside the game files, following the template in that document. If unsure, explain what the TUI provides (persistent tabbed overview of all session state, visual HP/MP bars, interactive dice roller) and let the player decide.
+
+### Step 3: Build the Game
+
+Only after the player confirms the plan, generate all game files following the directory structure below. Create files in dependency order:
+
+1. `settings/default.json` and `settings/custom.json` — configuration first, since other files reference it.
+2. `game/background.md` — world lore that informs everything else.
+3. `game/npcs.md` — NPC definitions.
+4. `game/sessions.md` — session file schema (must exist before `game/init.md` references it).
+5. `game/init.md` — initialization procedure.
+6. `agent/system.md`, `agent/game.md`, `agent/player.md` — agent behavior.
+7. `tools/*.py` — helper tools if needed.
+8. `NEW GAME.md`, `LOAD GAME.md`, `SAVE GAME.md` — player entry points.
+9. **Python environment** — run `uv venv` in the game root, then `uv pip install` any packages needed by `tools/` scripts or the TUI.
+10. `tui/tui_viewer.py` — TUI viewer, if the player requested one (follow `tui_template.md`).
+
+---
+
 ## Directory Structure Overview
 
 ```
@@ -11,6 +57,7 @@ An **agentic game** is a game defined entirely by `.md` files (and optionally Py
 ├── NEW GAME.md            # Player entry point: start a new game
 ├── LOAD GAME.md           # Player entry point: load an existing save
 ├── SAVE GAME.md           # Player entry point: save the current session
+├── .venv/                 # Python virtual environment (created during setup)
 ├── game/                  # Game definition (read-only during play)
 │   ├── init.md
 │   ├── background.md
@@ -25,6 +72,8 @@ An **agentic game** is a game defined entirely by `.md` files (and optionally Py
 │   └── custom.json
 ├── tools/                 # (Optional) Python helper tools
 │   └── *.py
+├── tui/                   # (Optional) TUI dashboard — see tui_template.md
+│   └── tui_viewer.py
 ├── session/               # Live game state (created at runtime)
 │   └── (files defined by sessions.md)
 └── saves/                 # Saved snapshots of session/
@@ -177,12 +226,41 @@ Settings may include (game-specific):
 
 ---
 
+## Python Environment Setup
+
+Any game that uses Python tools (`tools/`) or a TUI viewer (`tui/`) must have a virtual environment. The creating agent must set this up as part of game creation using `uv`:
+
+```bash
+cd <game_root>
+uv venv                        # Creates .venv/ in the game root
+```
+
+Then install any dependencies the tools or TUI require:
+
+```bash
+uv add textual          # Required if TUI viewer is included
+uv add rich          # Required if TUI viewer is included
+uv add <other-deps>     # Any packages the tools/ scripts need
+```
+
+All tool and TUI invocations must use the venv's Python:
+
+```bash
+.venv/bin/python tools/dice.py d20+5
+.venv/bin/python tui/tui_viewer.py .
+```
+
+The `agent/system.md` file should document which packages are installed and remind the agent to use `.venv/bin/python` when invoking any scripts.
+
+---
+
 ## `tools/` Folder — Python Helper Tools (Optional)
 
 Contains Python scripts that the agent can invoke to support gameplay. This folder is **optional** — simple games may not need any tools.
 
 - Tools are referenced and their usage is described in `agent/` folder `.md` files.
 - The agent must only use tools when instructed to by the agent behavior files.
+- Tools must be run with the game's venv Python (`.venv/bin/python`), not the system Python.
 - Example uses: dice rolling, random table lookups, map generation, complex calculations.
 
 ---
@@ -212,6 +290,23 @@ Contains named snapshots of the `session/` folder.
 
 ---
 
+## TUI Viewer (Optional)
+
+If the player requests a TUI viewer during game creation, generate `tui/tui_viewer.py` following the specification in **`tui_template.md`** (located in the repository root alongside this file).
+
+The TUI is a Textual-based terminal application that provides a tabbed dashboard for viewing all session state. It is a **read-only viewer** — it reads `session/` files but does not modify them. The agent remains the sole writer of game state.
+
+Key points for the creating agent:
+
+- The TUI lives in the `tui/` subfolder to keep the game root clean.
+- The TUI's parser must match the session file schema defined in `game/sessions.md`. Every file the game writes to `session/` should have a corresponding parser method and display panel.
+- The TUI can invoke tools from `tools/` (e.g., dice roller) for player convenience.
+- The player refreshes the TUI (press `r`) after the agent processes each turn to see updated state.
+
+See `tui_template.md` for the full specification including parser design, widget conventions, color schemes, and keyboard shortcuts.
+
+---
+
 ## Conventions Summary
 
 | Convention | Rule |
@@ -222,4 +317,7 @@ Contains named snapshots of the `session/` folder.
 | **Agent invokes** | `game/init.md` and any internal procedures — never directly by player |
 | **Read-only during play** | `game/`, `agent/`, `settings/default.json` |
 | **Read-write during play** | `session/`, `settings/custom.json` |
-| **Tools** | Optional; usage defined in `agent/` files; stored in `tools/` |
+| **Tools** | Optional; usage defined in `agent/` files; stored in `tools/`; run with `.venv/bin/python` |
+| **Python environment** | Created with `uv venv`; dependencies installed with `uv pip install`; all scripts use `.venv/bin/python` |
+| **TUI viewer** | Optional; created if player requests it; follows `tui_template.md`; requires `textual` in venv |
+| **Plan before building** | Always generate a plan, ask the player for specs, then build |
