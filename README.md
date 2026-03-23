@@ -73,4 +73,4 @@ Traditional text games give you a fixed set of choices. Agentic games give you a
 
 ## License
 
-This project is open for anyone to use, modify, and build upon. Go make something fun.
+This project is licensed under the [MIT License](LICENSE). Use it, modify it, and build upon it. Go make something fun.
