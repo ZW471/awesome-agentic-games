@@ -41,6 +41,7 @@
       "verbose": "Rich, immersive prose. Every location and event described in full detail."
     },
     "tone": "dark_epic",
+    "language": "en",
     "options_tone": ["lighthearted", "balanced", "dark_epic"],
     "show_stat_blocks": true,
     "show_void_counter": true,

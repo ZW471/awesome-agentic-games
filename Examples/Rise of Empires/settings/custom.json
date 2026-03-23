@@ -1,0 +1,12 @@
+{
+  "language": "en",
+  "difficulty": "normal",
+  "narrative_style": "detailed",
+  "auto_save": true,
+  "auto_save_interval": 10,
+  "actions_per_turn": 2,
+  "map_size": "5x5",
+  "max_turns": 150,
+  "event_chance_threshold": 17,
+  "disaster_threshold": 1
+}
