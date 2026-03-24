@@ -44,6 +44,9 @@ from textual.widgets import (
     Markdown,
 )
 from textual.css.query import NoMatches
+from textual.strip import Strip
+from rich.segment import Segment
+from rich.style import Style as RichStyle
 from rich.text import Text
 from rich.panel import Panel
 from rich.table import Table
@@ -86,7 +89,9 @@ class PtyTerminal(Static, can_focus=True):
         self._reader_running = False
 
     def on_mount(self) -> None:
-        self._pty_screen = pyte.Screen(80, 24)
+        cols = max(self.size.width - 2, 10)
+        rows = max(self.size.height - 2, 5)
+        self._pty_screen = pyte.Screen(cols, rows)
         self._pty_stream = pyte.Stream(self._pty_screen)
 
     def start(self) -> None:
@@ -175,37 +180,55 @@ class PtyTerminal(Static, can_focus=True):
         event.prevent_default()
         event.stop()
 
-    def render(self) -> Text:
-        if self._pty_screen is None:
-            return Text("Terminal not started")
-        text = Text()
-        for y in range(self._pty_screen.lines):
-            line = self._pty_screen.buffer[y]
-            for x in range(self._pty_screen.columns):
-                char_data = line[x]
-                ch = char_data.data or " "
-                style_parts = []
-                fg = char_data.fg
-                if fg and fg != "default":
-                    rich_fg = PYTE_TO_RICH_COLORS.get(fg, fg)
-                    style_parts.append(rich_fg)
-                bg = char_data.bg
-                if bg and bg != "default":
-                    rich_bg = PYTE_TO_RICH_COLORS.get(bg, bg)
-                    style_parts.append(f"on {rich_bg}")
-                if char_data.bold:
-                    style_parts.append("bold")
-                if char_data.italics:
-                    style_parts.append("italic")
-                if char_data.underscore:
-                    style_parts.append("underline")
-                if y == self._pty_screen.cursor.y and x == self._pty_screen.cursor.x and self.has_focus:
-                    style_parts.append("reverse")
-                style = " ".join(style_parts) if style_parts else ""
-                text.append(ch, style=style)
-            if y < self._pty_screen.lines - 1:
-                text.append("\n")
-        return text
+    def get_content_width(self, container, viewport):
+        if self._pty_screen:
+            return self._pty_screen.columns
+        return container.width
+
+    def get_content_height(self, container, viewport, width):
+        if self._pty_screen:
+            return self._pty_screen.lines
+        return container.height
+
+    def render_line(self, y: int) -> Strip:
+        if self._pty_screen is None or y >= self._pty_screen.lines:
+            return Strip.blank(self.size.width)
+
+        segments = []
+        line = self._pty_screen.buffer[y]
+        for x in range(self._pty_screen.columns):
+            char_data = line[x]
+            ch = char_data.data or " "
+            fg_color = None
+            bg_color = None
+            bold = char_data.bold
+            italic = char_data.italics
+            underline = char_data.underscore
+
+            fg = char_data.fg
+            if fg and fg != "default":
+                fg_color = PYTE_TO_RICH_COLORS.get(fg, f"#{fg}" if len(fg) == 6 and all(c in "0123456789abcdefABCDEF" for c in fg) else fg)
+            bg = char_data.bg
+            if bg and bg != "default":
+                bg_color = PYTE_TO_RICH_COLORS.get(bg, f"#{bg}" if len(bg) == 6 and all(c in "0123456789abcdefABCDEF" for c in bg) else bg)
+
+            is_cursor = (
+                self.has_focus
+                and y == self._pty_screen.cursor.y
+                and x == self._pty_screen.cursor.x
+            )
+
+            style = RichStyle(
+                color=fg_color,
+                bgcolor=bg_color,
+                bold=bold,
+                italic=italic,
+                underline=underline,
+                reverse=is_cursor,
+            )
+            segments.append(Segment(ch, style))
+
+        return Strip(segments, self._pty_screen.columns)
 
     def cleanup(self) -> None:
         self._reader_running = False
