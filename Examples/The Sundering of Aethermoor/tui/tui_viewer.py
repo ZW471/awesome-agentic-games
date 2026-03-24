@@ -6,11 +6,13 @@ A Textual-based terminal UI for viewing and interacting with
 agentic game sessions. Built for The Sundering of Aethermoor.
 
 Usage:
-    python tui_viewer.py [game_directory]
+    python tui_viewer.py [game_directory] [--terminal true|false]
 
 If no directory is provided, uses the current directory.
+Use --terminal false to disable the integrated PTY terminal panel.
 """
 
+import argparse
 import copy
 import fcntl
 import json
@@ -18,7 +20,6 @@ import os
 import pty
 import re
 import struct
-import sys
 import subprocess
 import termios
 import unicodedata
@@ -1321,7 +1322,9 @@ class DicePanel(Static):
 
 # ─── Main App ─────────────────────────────────────────────────────────────────
 
-GAME_CSS = """
+def make_css(with_terminal: bool) -> str:
+    """Generate the app CSS based on whether the terminal panel is enabled."""
+    base = """
 Screen {
     background: $surface;
 }
@@ -1331,21 +1334,6 @@ Screen {
     background: #1a1a2e;
     padding: 0 1;
     color: white;
-}
-
-#split-view {
-    height: 1fr;
-}
-
-#terminal-panel {
-    width: 50%;
-    height: 1fr;
-    border-right: solid grey;
-}
-
-#main-content {
-    width: 50%;
-    height: 1fr;
 }
 
 TabbedContent {
@@ -1370,12 +1358,34 @@ VerticalScroll {
     height: 1fr;
 }
 """
+    if with_terminal:
+        base += """
+#split-view {
+    height: 1fr;
+}
+
+#terminal-panel {
+    width: 50%;
+    height: 1fr;
+    border-right: solid grey;
+}
+
+#main-content {
+    width: 50%;
+    height: 1fr;
+}
+"""
+    else:
+        base += """
+#main-content {
+    height: 1fr;
+}
+"""
+    return base
 
 
 class AethermoorTUI(App):
     """The Sundering of Aethermoor — Game Session Viewer"""
-
-    CSS = GAME_CSS
 
     TITLE = "Agentic Game Session Viewer"
     SUB_TITLE = "The Sundering of Aethermoor"
@@ -1395,11 +1405,13 @@ class AethermoorTUI(App):
         Binding("8", "tab_log", "Log", show=False),
     ]
 
-    def __init__(self, game_dir: str):
+    def __init__(self, game_dir: str, with_terminal: bool = True):
         super().__init__()
         self.game_dir = game_dir
+        self.with_terminal = with_terminal
         self.parser = SessionParser(game_dir)
         self.session_data = {}
+        self.CSS = make_css(with_terminal)
 
     def compose(self) -> ComposeResult:
         self.session_data = self.parser.parse_all()
@@ -1412,64 +1424,65 @@ class AethermoorTUI(App):
 
         yield Header()
 
-        with Horizontal(id="split-view"):
-            with Vertical(id="terminal-panel"):
-                yield PtyTerminal(command="bash", id="game-terminal")
+        tabs_content = TabbedContent(
+            "Character", "World", "Location", "Inventory",
+            "Quests", "NPCs", "Companions", "Log", "Dice", "Settings",
+        )
 
+        if self.with_terminal:
+            with Horizontal(id="split-view"):
+                with Vertical(id="terminal-panel"):
+                    yield PtyTerminal(command="bash", id="game-terminal")
+                with Vertical(id="main-content"):
+                    with tabs_content:
+                        yield from self._compose_tab_panes()
+        else:
             with Vertical(id="main-content"):
-                with TabbedContent(
-                    "Character",
-                    "World",
-                    "Location",
-                    "Inventory",
-                    "Quests",
-                    "NPCs",
-                    "Companions",
-                    "Log",
-                    "Dice",
-                    "Settings",
-                ):
-                    with TabPane("Character", id="tab-character"):
-                        with VerticalScroll():
-                            yield CharacterPanel(self.session_data)
-
-                    with TabPane("World", id="tab-world"):
-                        with VerticalScroll():
-                            yield WorldPanel(self.session_data)
-
-                    with TabPane("Location", id="tab-location"):
-                        with VerticalScroll():
-                            yield LocationPanel(self.session_data)
-
-                    with TabPane("Inventory", id="tab-inventory"):
-                        with VerticalScroll():
-                            yield InventoryPanel(self.session_data)
-
-                    with TabPane("Quests", id="tab-quests"):
-                        with VerticalScroll():
-                            yield QuestsPanel(self.session_data)
-
-                    with TabPane("NPCs", id="tab-npcs"):
-                        with VerticalScroll():
-                            yield NPCPanel(self.session_data)
-
-                    with TabPane("Companions", id="tab-companions"):
-                        with VerticalScroll():
-                            yield CompanionsPanel(self.session_data)
-
-                    with TabPane("Log", id="tab-log"):
-                        with VerticalScroll():
-                            yield LogPanel(self.session_data)
-
-                    with TabPane("Dice", id="tab-dice"):
-                        with VerticalScroll():
-                            yield DicePanel(self.game_dir)
-
-                    with TabPane("Settings", id="tab-settings"):
-                        with VerticalScroll():
-                            yield SettingsPanel(self.session_data)
+                with tabs_content:
+                    yield from self._compose_tab_panes()
 
         yield Footer()
+
+    def _compose_tab_panes(self) -> ComposeResult:
+        with TabPane("Character", id="tab-character"):
+            with VerticalScroll():
+                yield CharacterPanel(self.session_data)
+
+        with TabPane("World", id="tab-world"):
+            with VerticalScroll():
+                yield WorldPanel(self.session_data)
+
+        with TabPane("Location", id="tab-location"):
+            with VerticalScroll():
+                yield LocationPanel(self.session_data)
+
+        with TabPane("Inventory", id="tab-inventory"):
+            with VerticalScroll():
+                yield InventoryPanel(self.session_data)
+
+        with TabPane("Quests", id="tab-quests"):
+            with VerticalScroll():
+                yield QuestsPanel(self.session_data)
+
+        with TabPane("NPCs", id="tab-npcs"):
+            with VerticalScroll():
+                yield NPCPanel(self.session_data)
+
+        with TabPane("Companions", id="tab-companions"):
+            with VerticalScroll():
+                yield CompanionsPanel(self.session_data)
+
+        with TabPane("Log", id="tab-log"):
+            with VerticalScroll():
+                yield LogPanel(self.session_data)
+
+        with TabPane("Dice", id="tab-dice"):
+            with VerticalScroll():
+                yield DicePanel(self.game_dir)
+
+        with TabPane("Settings", id="tab-settings"):
+            with VerticalScroll():
+                yield SettingsPanel(self.session_data)
 
     def _make_top_bar(self, player: dict, world: dict) -> Text:
         t = Text()
@@ -1504,10 +1517,17 @@ class AethermoorTUI(App):
         return t
 
     def on_ready(self) -> None:
-        terminal = self.query_one("#game-terminal", PtyTerminal)
-        terminal.start()
+        if self.with_terminal:
+            try:
+                terminal = self.query_one("#game-terminal", PtyTerminal)
+                terminal.start()
+            except NoMatches:
+                pass
 
     def action_focus_terminal(self) -> None:
+        if not self.with_terminal:
+            self.notify("Terminal is disabled. Restart with --terminal true to enable.")
+            return
         try:
             self.query_one("#game-terminal", PtyTerminal).focus()
         except NoMatches:
@@ -1587,18 +1607,36 @@ class AethermoorTUI(App):
         self._switch_tab("tab-log")
 
     def on_unmount(self) -> None:
-        try:
-            terminal = self.query_one("#game-terminal", PtyTerminal)
-            terminal.cleanup()
-        except NoMatches:
-            pass
+        if self.with_terminal:
+            try:
+                terminal = self.query_one("#game-terminal", PtyTerminal)
+                terminal.cleanup()
+            except NoMatches:
+                pass
 
 
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 
 def main():
-    if len(sys.argv) > 1:
-        game_dir = sys.argv[1]
+    parser = argparse.ArgumentParser(
+        description="The Sundering of Aethermoor — TUI Session Viewer",
+    )
+    parser.add_argument(
+        "game_dir",
+        nargs="?",
+        default=None,
+        help="Path to the game root directory (default: auto-detect from cwd)",
+    )
+    parser.add_argument(
+        "--terminal",
+        choices=["true", "false"],
+        default="true",
+        help="Enable or disable the integrated PTY terminal panel (default: true)",
+    )
+    args = parser.parse_args()
+
+    if args.game_dir:
+        game_dir = args.game_dir
     else:
         # Auto-detect game root: if run from inside tui/, look one level up
         cwd = Path(os.getcwd())
@@ -1616,7 +1654,8 @@ def main():
         print(f"Warning: No session/ directory found in {game_dir}")
         print("The TUI will show empty panels. Start a game first to populate session data.")
 
-    app = AethermoorTUI(game_dir)
+    with_terminal = args.terminal == "true"
+    app = AethermoorTUI(game_dir, with_terminal=with_terminal)
     app.run()
 
 
