@@ -11,6 +11,7 @@ Usage:
 If no directory is provided, uses the current directory.
 """
 
+import copy
 import fcntl
 import json
 import os
@@ -20,6 +21,7 @@ import struct
 import sys
 import subprocess
 import termios
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
@@ -66,6 +68,57 @@ PYTE_TO_RICH_COLORS = {
 }
 
 
+class EnhancedScreen(pyte.HistoryScreen):
+    """HistoryScreen with alternate screen buffer (modes 47/1047/1049)."""
+
+    def __init__(self, columns, lines, history=1000, ratio=0.5):
+        super().__init__(columns, lines, history=history, ratio=ratio)
+        self._saved_buffer = None
+        self._saved_cursor = None
+        self._saved_history = None
+        self._in_alternate = False
+
+    def set_mode(self, *modes, **kwargs):
+        if kwargs.get("private"):
+            for mode in modes:
+                if mode in (47, 1047, 1049):
+                    self._enter_alternate()
+                    break
+        super().set_mode(*modes, **kwargs)
+
+    def reset_mode(self, *modes, **kwargs):
+        if kwargs.get("private"):
+            for mode in modes:
+                if mode in (47, 1047, 1049):
+                    self._leave_alternate()
+                    break
+        super().reset_mode(*modes, **kwargs)
+
+    def _enter_alternate(self):
+        if not self._in_alternate:
+            self._saved_buffer = copy.deepcopy(self.buffer)
+            self._saved_cursor = copy.copy(self.cursor)
+            self._saved_history = copy.deepcopy(self.history)
+            self.erase_in_display(2)
+            self._in_alternate = True
+
+    def _leave_alternate(self):
+        if self._in_alternate:
+            self.buffer = self._saved_buffer
+            self.cursor = self._saved_cursor
+            self.history = self._saved_history
+            self._in_alternate = False
+            self.dirty.update(range(self.lines))
+
+    def prev_page(self):
+        if not self._in_alternate:
+            super().prev_page()
+
+    def next_page(self):
+        if not self._in_alternate:
+            super().next_page()
+
+
 class PtyTerminal(Static, can_focus=True):
     """A terminal widget that embeds a real PTY shell using pyte."""
 
@@ -73,6 +126,7 @@ class PtyTerminal(Static, can_focus=True):
     PtyTerminal {
         height: 1fr;
         width: 1fr;
+        border: solid grey;
     }
     PtyTerminal:focus {
         border: solid $accent;
@@ -84,14 +138,14 @@ class PtyTerminal(Static, can_focus=True):
         self.command = command
         self.master_fd: int | None = None
         self._process: subprocess.Popen | None = None
-        self._pty_screen: pyte.Screen | None = None
+        self._pty_screen: EnhancedScreen | None = None
         self._pty_stream: pyte.Stream | None = None
         self._reader_running = False
 
     def on_mount(self) -> None:
         cols = max(self.size.width - 2, 10)
         rows = max(self.size.height - 2, 5)
-        self._pty_screen = pyte.Screen(cols, rows)
+        self._pty_screen = EnhancedScreen(cols, rows)
         self._pty_stream = pyte.Stream(self._pty_screen)
 
     def start(self) -> None:
@@ -119,6 +173,16 @@ class PtyTerminal(Static, can_focus=True):
         flags = fcntl.fcntl(self.master_fd, fcntl.F_GETFL)
         fcntl.fcntl(self.master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
 
+        # Relay pyte's device attribute responses back to the PTY
+        _master = self.master_fd
+        def _write_to_pty(data):
+            try:
+                os.write(_master, data.encode("utf-8"))
+            except OSError:
+                pass
+        if self._pty_screen:
+            self._pty_screen.write_process_input = _write_to_pty
+
         self._reader_running = True
         self._poll_pty()
 
@@ -132,9 +196,19 @@ class PtyTerminal(Static, can_focus=True):
                 pass
 
     def on_resize(self, event) -> None:
+        self._trigger_resize()
+
+    def on_focus(self, event) -> None:
+        self._trigger_resize()
+
+    def on_blur(self, event) -> None:
+        self._trigger_resize()
+
+    def _trigger_resize(self) -> None:
         cols = max(self.size.width - 2, 10)
         rows = max(self.size.height - 2, 5)
-        self._resize_pty(cols, rows)
+        if self._pty_screen and (cols != self._pty_screen.columns or rows != self._pty_screen.lines):
+            self._resize_pty(cols, rows)
 
     def _poll_pty(self) -> None:
         """Read available data from the PTY and feed it to pyte."""
@@ -144,23 +218,50 @@ class PtyTerminal(Static, can_focus=True):
             data = os.read(self.master_fd, 65536)
             if data:
                 self._pty_stream.feed(data.decode("utf-8", errors="replace"))
-                self.refresh()
+                if self._pty_screen.dirty:
+                    self.refresh()
+                    self._pty_screen.dirty.clear()
         except (OSError, BlockingIOError):
             pass
         if self._reader_running:
-            self.set_timer(0.05, self._poll_pty)
+            self.set_timer(0.02, self._poll_pty)
 
     def on_key(self, event: Key) -> None:
         if self.master_fd is None or not self.has_focus:
             return
 
+        # Scrollback navigation (don't send to PTY)
+        if event.key == "shift+pageup" and self._pty_screen:
+            self._pty_screen.prev_page()
+            self.refresh()
+            event.prevent_default()
+            event.stop()
+            return
+        if event.key == "shift+pagedown" and self._pty_screen:
+            self._pty_screen.next_page()
+            self.refresh()
+            event.prevent_default()
+            event.stop()
+            return
+
+        # Check if cursor keys are in application mode (DECCKM, private mode 1)
+        app_cursor = self._pty_screen and (32 in self._pty_screen.mode)
+
         key_map = {
             "enter": "\r", "escape": "\x1b", "tab": "\t",
+            "shift+tab": "\x1b[Z",
             "backspace": "\x7f", "delete": "\x1b[3~",
-            "up": "\x1b[A", "down": "\x1b[B",
-            "right": "\x1b[C", "left": "\x1b[D",
+            "up": "\x1bOA" if app_cursor else "\x1b[A",
+            "down": "\x1bOB" if app_cursor else "\x1b[B",
+            "right": "\x1bOC" if app_cursor else "\x1b[C",
+            "left": "\x1bOD" if app_cursor else "\x1b[D",
             "home": "\x1b[H", "end": "\x1b[F",
+            "insert": "\x1b[2~",
             "pageup": "\x1b[5~", "pagedown": "\x1b[6~",
+            "f1": "\x1bOP", "f2": "\x1bOQ", "f3": "\x1bOR", "f4": "\x1bOS",
+            "f5": "\x1b[15~", "f6": "\x1b[17~", "f7": "\x1b[18~",
+            "f8": "\x1b[19~", "f9": "\x1b[20~", "f10": "\x1b[21~",
+            "f11": "\x1b[23~", "f12": "\x1b[24~",
         }
 
         char = key_map.get(event.key)
@@ -196,9 +297,14 @@ class PtyTerminal(Static, can_focus=True):
 
         segments = []
         line = self._pty_screen.buffer[y]
-        for x in range(self._pty_screen.columns):
+        x = 0
+        while x < self._pty_screen.columns:
             char_data = line[x]
-            ch = char_data.data or " "
+            ch = char_data.data
+            if not ch:
+                # Stub cell from wide character — skip
+                x += 1
+                continue
             fg_color = None
             bg_color = None
             bold = char_data.bold
@@ -218,17 +324,37 @@ class PtyTerminal(Static, can_focus=True):
                 and x == self._pty_screen.cursor.x
             )
 
+            # XOR: if char is reverse AND cursor is here, they cancel out
+            effective_reverse = char_data.reverse ^ is_cursor
+
             style = RichStyle(
                 color=fg_color,
                 bgcolor=bg_color,
                 bold=bold,
                 italic=italic,
                 underline=underline,
-                reverse=is_cursor,
+                strike=char_data.strikethrough,
+                reverse=effective_reverse,
             )
             segments.append(Segment(ch, style))
 
+            # Skip stub cell for wide (2-cell) characters
+            eaw = unicodedata.east_asian_width(ch)
+            x += 2 if eaw in ('W', 'F') else 1
+
         return Strip(segments, self._pty_screen.columns)
+
+    def on_mouse_scroll_up(self, event) -> None:
+        if self._pty_screen:
+            self._pty_screen.prev_page()
+            self.refresh()
+            event.stop()
+
+    def on_mouse_scroll_down(self, event) -> None:
+        if self._pty_screen:
+            self._pty_screen.next_page()
+            self.refresh()
+            event.stop()
 
     def cleanup(self) -> None:
         self._reader_running = False
@@ -1212,13 +1338,13 @@ Screen {
 }
 
 #terminal-panel {
-    width: 40%;
+    width: 50%;
     height: 1fr;
     border-right: solid grey;
 }
 
 #main-content {
-    width: 60%;
+    width: 50%;
     height: 1fr;
 }
 

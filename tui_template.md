@@ -27,15 +27,97 @@ If the player declines, skip this entirely. The game still works.
 
 The TUI lives in its own `tui/` subfolder to keep the game root clean. It is a **read-only viewer** of the `session/` folder. It does not modify game state — that remains the agent's job. The TUI can also invoke tools from `tools/` (e.g., dice roller) for convenience.
 
-The player launches the TUI from the game root using the venv Python: `.venv/bin/python tui/tui_viewer.py .` (passing the game root as an argument).
+The player launches the TUI from the game root using the venv Python:
+
+```bash
+# With integrated terminal (default) — split-screen: shell on left, game panels on right
+.venv/bin/python tui/tui_viewer.py . --terminal true
+
+# Without integrated terminal — full-width game panels only
+.venv/bin/python tui/tui_viewer.py . --terminal false
+```
+
+### Reference Template
+
+A complete, generic Python template is provided at **`tui_template.py`** in the repository root. When building a TUI for a new game, copy this file into the game's `tui/` folder and customize it. The template includes all standard components (session parser, panel widgets, terminal widget, tool runner) with `CUSTOMIZE` markers at every game-specific decision point.
 
 ### Core Components
 
-The TUI has three layers:
+The TUI has four layers:
 
-1. **Session Parser** — reads all `.md` and `.json` files from `session/`, `settings/`, and `game/` directories, extracting structured data via regex patterns.
-2. **Widget Panels** — Rich-rendered `Static` widgets that display parsed data with color, bars, tables, and icons.
-3. **App Shell** — A `TabbedContent` layout with keyboard shortcuts, a status bar, and an input widget for interactive tools.
+1. **PTY Terminal Widget** (optional) — an embedded pseudo-terminal shell that lets the player interact with their AI agent (e.g., Claude Code) in one half of the screen while viewing game state in the other half. Controlled via the `--terminal` flag.
+2. **Session Parser** — reads all `.md` and `.json` files from `session/`, `settings/`, and `game/` directories, extracting structured data via regex patterns.
+3. **Widget Panels** — Rich-rendered `Static` widgets that display parsed data with color, bars, tables, and icons.
+4. **App Shell** — A `TabbedContent` layout with keyboard shortcuts, a status bar, and an input widget for interactive tools.
+
+---
+
+## Integrated Terminal (`--terminal` Flag)
+
+The TUI supports an **integrated PTY terminal** that embeds a live shell (e.g., bash, zsh) directly inside the TUI window. This is the primary way players interact with their AI agent while viewing game state.
+
+### Launch Modes
+
+```bash
+# Default: terminal enabled — split-screen layout
+.venv/bin/python tui/tui_viewer.py .
+
+# Explicit: same as above
+.venv/bin/python tui/tui_viewer.py . --terminal true
+
+# Terminal disabled — full-width dashboard mode
+.venv/bin/python tui/tui_viewer.py . --terminal false
+```
+
+| Mode | Layout | Use case |
+|------|--------|----------|
+| `--terminal true` (default) | Left 50%: live shell. Right 50%: tabbed game panels. | Player runs their AI agent in the terminal while viewing game state alongside. |
+| `--terminal false` | Full width: tabbed game panels only. | Player uses a separate terminal window for the agent, or just wants a read-only dashboard. |
+
+### How the Integrated Terminal Works
+
+The terminal is implemented as a `PtyTerminal` widget (see `tui_template.py`) that:
+
+1. **Spawns a real shell** via `pty.openpty()` + `subprocess.Popen`. The child process is a full interactive shell (`$SHELL` or `bash`) attached to a pseudo-terminal, not a fake prompt.
+2. **Parses ANSI output** using [pyte](https://github.com/selectel/pyte), a Python terminal emulator library. pyte maintains a virtual screen buffer that tracks cursor position, colors, text attributes, and scrollback history.
+3. **Renders to Textual** by converting pyte's screen buffer to Rich `Segment` objects line by line. Each character cell becomes a styled segment with the correct foreground/background color, bold, italic, underline, strikethrough, and reverse attributes.
+4. **Forwards keyboard input** by translating Textual `Key` events into the correct byte sequences (ANSI escape codes for arrow keys, function keys, etc.) and writing them to the PTY master file descriptor.
+5. **Polls for output** on a 20ms timer, reading up to 64KB per tick from the PTY master fd (set to non-blocking mode). Dirty lines trigger a widget refresh.
+
+### Terminal Capabilities
+
+The integrated terminal supports:
+
+- **Full ANSI color** — 256-color mode via `TERM=xterm-256color`.
+- **Alternate screen buffer** — Programs like `vim`, `less`, and `htop` that use modes 47/1047/1049 work correctly. The primary buffer is saved and restored when entering/leaving alternate mode.
+- **Scrollback history** — `Shift+PageUp` / `Shift+PageDown` / mouse wheel to scroll through past output. Scrollback is disabled while in alternate screen mode.
+- **Dynamic resize** — When the widget size changes (e.g., terminal window resize), the pyte screen is resized and a `TIOCSWINSZ` ioctl notifies the child process.
+- **Cursor rendering** — The cursor position is shown as reverse video when the terminal is focused.
+- **Wide characters** — CJK and other double-width characters are handled correctly.
+- **Ctrl key combos** — `Ctrl+C`, `Ctrl+D`, `Ctrl+Z`, etc. are sent as the correct control codes.
+
+### Terminal Focus Behavior
+
+When the terminal is **focused** (click it or press `t`):
+- ALL keyboard input goes to the shell — including keys that are normally TUI bindings (`q`, `r`, `d`, `1`-`8`). This is correct: the user is typing in the shell.
+- The terminal border changes to the accent color to indicate focus.
+
+When the terminal is **not focused** (click a tab, press `Escape` then another key):
+- Keyboard shortcuts work normally (tab switching, refresh, quit).
+
+### Platform Notes
+
+- The PTY terminal requires **Unix** (`pty`, `fcntl`, `termios` modules). It does not work on native Windows.
+- The `pyte` package must be installed: `uv pip install pyte` (in addition to `textual`).
+
+### Implementation in `tui_template.py`
+
+The terminal widget is fully implemented in `tui_template.py` as the `PtyTerminal` class with supporting `EnhancedScreen` class. The `GameTUI` app class conditionally includes the terminal panel based on the `--terminal` flag, using different CSS layouts:
+
+- **With terminal**: `Horizontal` split — `#terminal-panel` (50% width) + `#main-content` (50% width).
+- **Without terminal**: Single `#main-content` at full width.
+
+The terminal is started in `on_ready()` and cleaned up in `on_unmount()`.
 
 ---
 
@@ -231,8 +313,11 @@ For games with multiple tools, the tab can include a tool selector or accept a p
 |-----|--------|
 | `q` | Quit the TUI |
 | `r` | Refresh all data from `session/` files |
+| `t` | Focus the integrated terminal (when `--terminal true`) |
 | `d` | Focus the tool runner input |
 | `1`-`8` | Switch directly to tabs 1-8 |
+
+**Note:** When the terminal is focused, all keys go to the shell. Click outside the terminal or press `Escape` first to use TUI shortcuts.
 
 ### Refresh
 
@@ -260,7 +345,9 @@ def action_refresh(self) -> None:
 
 ## App Shell (CSS & Layout)
 
-Use Textual's built-in `TabbedContent` for tab management. Minimal CSS:
+Use Textual's built-in `TabbedContent` for tab management. The CSS adapts based on whether the terminal is enabled.
+
+**Base CSS (always applied):**
 
 ```css
 Screen { background: $surface; }
@@ -272,7 +359,19 @@ TabPane { padding: 1 2; }
 VerticalScroll { height: 1fr; }
 ```
 
+**Additional CSS when `--terminal true`:**
+
+```css
+#split-view { height: 1fr; }
+#terminal-panel { width: 50%; height: 1fr; border-right: solid grey; }
+#main-content { width: 50%; height: 1fr; }
+```
+
+**When `--terminal false`**, the `#split-view` and `#terminal-panel` elements are absent — `#main-content` takes full width.
+
 Wrap each `TabPane`'s content in a `VerticalScroll` so panels with long content (log, inventory, NPCs) are scrollable.
+
+The `tui_template.py` file generates the appropriate CSS dynamically via the `make_css(with_terminal)` function.
 
 ---
 
@@ -282,16 +381,25 @@ The TUI requires a virtual environment with its dependencies installed. The crea
 
 ```bash
 cd <game_root>
-uv venv                     # Creates .venv/ (skip if already exists for tools/)
-uv pip install textual       # Required for the TUI — also pulls in rich
+uv venv                          # Creates .venv/ (skip if already exists for tools/)
+uv pip install textual pyte      # textual = TUI framework (pulls in rich), pyte = terminal emulator
 ```
 
-This provides `textual` (the TUI framework) and `rich` (text styling, tables, console rendering) as a transitive dependency.
+This provides:
+- `textual` — the TUI framework.
+- `rich` — text styling, tables, console rendering (transitive dependency of textual).
+- `pyte` — Python terminal emulator library, used by the integrated PTY terminal widget.
+
+If the player will always use `--terminal false`, `pyte` is not needed — but it's simpler to install both.
 
 The TUI itself must be launched with the venv's Python:
 
 ```bash
+# With integrated terminal (default)
 .venv/bin/python tui/tui_viewer.py .
+
+# Without integrated terminal
+.venv/bin/python tui/tui_viewer.py . --terminal false
 ```
 
 Inside `tui_viewer.py`, any `subprocess.run()` calls to `tools/` scripts must also use the venv Python (see the Tool Runner section above).
@@ -322,17 +430,21 @@ The visual conventions (bars, colors, severity scales) apply universally — jus
 
 When building a TUI for a new game:
 
-1. **Set up the venv** — run `uv venv` in the game root (if not already created for `tools/`), then `uv pip install textual`.
-2. **Read `game/sessions.md`** to understand what files exist in `session/` and their schemas.
-3. **Write parser methods** for each session file, matching the markdown patterns that game uses.
-4. **Choose which tabs to include** based on what data the game tracks.
-5. **Match the visual theme** to the game's tone. A horror game might use red/grey; a lighthearted game might use brighter colors. The color tables above are starting points, not requirements.
-6. **Implement the top status bar** with the game's most critical at-a-glance values.
-7. **Add interactive tool tabs** if the game has scripts in `tools/`. Use `.venv/bin/python` for subprocess calls.
-8. **Test the parser** against actual session data — verify each method returns valid data and handles missing files gracefully.
+1. **Copy `tui_template.py`** into the game's `tui/` folder and rename to `tui_viewer.py`.
+2. **Set up the venv** — run `uv venv` in the game root (if not already created for `tools/`), then `uv pip install textual pyte`.
+3. **Read `game/sessions.md`** to understand what files exist in `session/` and their schemas.
+4. **Customize the `SessionParser`** — write `parse_*()` methods for each session file, matching the markdown patterns that game uses. Look for `CUSTOMIZE` markers in the template.
+5. **Choose which tabs to include** based on what data the game tracks. Add/remove `TabPane` entries in `_compose_tab_panes()`.
+6. **Customize panel widgets** — update each panel's `render()` method to display your game's data. Add new panel classes for game-specific tabs.
+7. **Match the visual theme** to the game's tone. A horror game might use red/grey; a lighthearted game might use brighter colors. The color tables above are starting points, not requirements.
+8. **Implement the top status bar** (`_make_top_bar()`) with the game's most critical at-a-glance values.
+9. **Add interactive tool tabs** if the game has scripts in `tools/`. Use `.venv/bin/python` for subprocess calls.
+10. **Test the parser** against actual session data — verify each method returns valid data and handles missing files gracefully.
+11. **Test both terminal modes** — verify the TUI works with `--terminal true` (split-screen) and `--terminal false` (full-width).
 
 ---
 
 ## Reference Implementation
 
-See the `tui/` folder in any example game for a complete working implementation demonstrating all standard features (parser, widget panels, status bar, dice roller, keyboard shortcuts). Use it as a structural starting point, then replace the parser methods and panel widgets to match your game's session schema.
+- **`tui_template.py`** (repository root) — the generic, game-agnostic template with all standard components. Copy this as your starting point and search for `CUSTOMIZE` markers.
+- **`Examples/The Sundering of Aethermoor/tui/tui_viewer.py`** — a complete working implementation for a specific RPG game, demonstrating customized parser methods, themed panel widgets, and game-specific visual elements. Use it as a reference for how a real game adapts the template.
