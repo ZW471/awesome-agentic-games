@@ -48,6 +48,10 @@ This repo includes two example games to get you started:
 | [The Sundering of Aethermoor](Examples/The%20Sundering%20of%20Aethermoor/) | A dark fantasy RPG — play as a Riftwalker in a world being torn apart by the Void |
 | [Rise of Empires](Examples/Rise%20of%20Empires/) | A civilization-building strategy game — guide your people from humble beginnings to greatness |
 
+An example session of *The Sundering of Aethermoor*:
+
+![fig:the_sundering_of_aethermoor](./assets/TheSunderingOfAethermoor.svg)
+
 ## Project Structure
 
 ```
