@@ -44,7 +44,7 @@ Only after the player confirms the plan, generate all game files following the d
 5. `game/init.md` — initialization procedure.
 6. `agent/system.md`, `agent/game.md`, `agent/player.md` — agent behavior.
 7. `tools/*.py` — helper tools if needed.
-8. `NEW GAME.md`, `LOAD GAME.md`, `SAVE GAME.md` — player entry points.
+8. `NEW GAME.md`, `LOAD GAME.md`, `SAVE GAME.md`, `RESUME.md` — player entry points.
 9. **Python environment** — run `uv venv` in the game root, then `uv pip install` any packages needed by `tools/` scripts or the TUI.
 10. `tui/tui_viewer.py` — TUI viewer, if the player requested one (follow `tui_template.md`).
 
@@ -57,6 +57,7 @@ Only after the player confirms the plan, generate all game files following the d
 ├── NEW GAME.md            # Player entry point: start a new game
 ├── LOAD GAME.md           # Player entry point: load an existing save
 ├── SAVE GAME.md           # Player entry point: save the current session
+├── RESUME.md              # Player entry point: resume the current session
 ├── .venv/                 # Python virtual environment (created during setup)
 ├── game/                  # Game definition (read-only during play)
 │   ├── init.md
@@ -84,7 +85,7 @@ Only after the player confirms the plan, generate all game files following the d
 
 ## Root-Level Entry Points
 
-Root-level `.md` files use **UPPER CASE** names. These are the only files the **player** invokes directly (via `@` mention). The agent must never prompt the player to invoke anything else — these three files are the entire player-facing interface for game lifecycle operations.
+Root-level `.md` files use **UPPER CASE** names. These are the only files the **player** invokes directly (via `@` mention). The agent must never prompt the player to invoke anything else — these four files are the entire player-facing interface for game lifecycle operations.
 
 ### `NEW GAME.md`
 
@@ -115,6 +116,17 @@ Invoked by the **player** to save the current session. When called, the agent mu
 1. Verify an active `session/` folder exists.
 2. Copy the entire `session/` folder into `saves/<save_name>/`, where `<save_name>` is the name chosen during `NEW GAME`.
 3. Confirm the save to the player.
+
+### `RESUME.md`
+
+Invoked by the **player** to continue the current in-progress session across a new agent conversation. Unlike `LOAD GAME.md` (which restores from a save), `RESUME.md` picks up directly from the existing `session/` folder — no save selection needed. This is the quickest way to get back into a game when the session files are already in place. When called, the agent must:
+
+1. Read the `agent/` folder and `game/` folder.
+2. Read `settings/custom.json`.
+3. Verify an active `session/` folder exists. If not, direct the player to `NEW GAME.md` or `LOAD GAME.md`.
+4. Read all files in `session/` to fully restore the game state.
+5. Present a brief status recap (character name, location, turn count) to orient the player.
+6. Resume the game session from the current state.
 
 ---
 
@@ -271,6 +283,7 @@ The runtime state of the current game. This folder:
 
 - Is **created** during `NEW GAME` (via the procedure in `game/init.md`).
 - Is **overwritten** during `LOAD GAME` (from a save).
+- Is **read in full** during `RESUME` (to restore state in a new agent conversation).
 - Is **copied** during `SAVE GAME` (into `saves/<save_name>/`).
 - Contains everything the player can see or that affects gameplay during a session.
 - Its structure is defined by `game/sessions.md`.
@@ -313,7 +326,7 @@ See `tui_template.md` for the full specification including parser design, widget
 |-----------|------|
 | **UPPER CASE `.md`** | Root-level entry points invoked by the player |
 | **lowercase `.md`** | All other files (game definition, agent instructions, session state) |
-| **Player invokes** | Only `NEW GAME.md`, `LOAD GAME.md`, `SAVE GAME.md` (via `@`) |
+| **Player invokes** | Only `NEW GAME.md`, `LOAD GAME.md`, `SAVE GAME.md`, `RESUME.md` (via `@`) |
 | **Agent invokes** | `game/init.md` and any internal procedures — never directly by player |
 | **Read-only during play** | `game/`, `agent/`, `settings/default.json` |
 | **Read-write during play** | `session/`, `settings/custom.json` |

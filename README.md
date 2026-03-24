@@ -52,6 +52,11 @@ An example session of *The Sundering of Aethermoor*:
 
 ![fig:the_sundering_of_aethermoor](./assets/TheSunderingOfAethermoor.svg)
 
+This game was created simply by telling Claude Code to:
+```
+read @game_template.md and come up with a good story (something magical, epic) and then create this game. for example, you could use the story of the lord of the rings as a template
+```
+
 ## Project Structure
 
 ```

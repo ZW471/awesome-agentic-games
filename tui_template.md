@@ -117,7 +117,7 @@ The terminal widget is fully implemented in `tui_template.py` as the `PtyTermina
 - **With terminal**: `Horizontal` split — `#terminal-panel` (50% width) + `#main-content` (50% width).
 - **Without terminal**: Single `#main-content` at full width.
 
-The terminal is started in `on_ready()` and cleaned up in `on_unmount()`.
+The terminal is started in `on_mount()` and cleaned up in `on_unmount()`.
 
 ---
 
@@ -321,7 +321,22 @@ For games with multiple tools, the tab can include a tool selector or accept a p
 
 ### Refresh
 
-The `r` key re-reads all session files and re-renders all panels. This is essential since the agent modifies `session/` files during gameplay — the player presses `r` after each turn to see updated state.
+The TUI supports both **manual** and **automatic** refresh of session data.
+
+**Manual refresh:** The `r` key re-reads all session files and re-renders all panels, showing a notification toast to confirm.
+
+**Auto-refresh:** By default, the TUI automatically refreshes every **5 seconds** — silently re-reading all session files and updating panels without a notification toast. This means the player sees updated state shortly after the agent processes each turn, without needing to press `r`. The interval is controlled via the `--refresh` CLI flag:
+
+```bash
+# Default: auto-refresh every 5 seconds
+.venv/bin/python tui/tui_viewer.py .
+
+# Custom interval: refresh every 10 seconds
+.venv/bin/python tui/tui_viewer.py . --refresh 10
+
+# Disable auto-refresh (manual only via `r` key)
+.venv/bin/python tui/tui_viewer.py . --refresh 0
+```
 
 **Implementation note:** Re-parsing the data is not enough — the new data must be propagated to every widget. Panel widgets store their own reference to the data dict (`self.data`). If `action_refresh` only reassigns `self.session_data` on the app, widgets still hold the old reference and won't update. The refresh handler must:
 
@@ -330,15 +345,29 @@ The `r` key re-reads all session files and re-renders all panels. This is essent
 3. Call `.refresh()` on each widget to trigger a re-render.
 4. Update the top status bar separately (via `.update()` on the Static widget).
 
+The auto-refresh timer is started in `on_mount()` via `set_interval()`, calling a silent `_periodic_refresh()` method that does the same work as `action_refresh()` but skips the notification toast:
+
 ```python
+def on_mount(self) -> None:
+    # ... terminal setup ...
+    if self.auto_refresh_interval > 0:
+        self.set_interval(self.auto_refresh_interval, self._periodic_refresh)
+
 def action_refresh(self) -> None:
     self.session_data = self.parser.parse_all()
     for widget in self.query("CharacterPanel, WorldPanel, ..."):
         widget.data = self.session_data
         widget.refresh()
-    # Also update the top status bar
     self.query_one("#top-bar", Static).update(self._make_top_bar(...))
     self.notify("Session data refreshed!")
+
+def _periodic_refresh(self) -> None:
+    """Same as action_refresh but silent (no notification toast)."""
+    self.session_data = self.parser.parse_all()
+    for widget in self.query("CharacterPanel, WorldPanel, ..."):
+        widget.data = self.session_data
+        widget.refresh()
+    self.query_one("#top-bar", Static).update(self._make_top_bar(...))
 ```
 
 ---
@@ -395,11 +424,17 @@ If the player will always use `--terminal false`, `pyte` is not needed — but i
 The TUI itself must be launched with the venv's Python:
 
 ```bash
-# With integrated terminal (default)
+# With integrated terminal (default), auto-refresh every 5s
 .venv/bin/python tui/tui_viewer.py .
 
 # Without integrated terminal
 .venv/bin/python tui/tui_viewer.py . --terminal false
+
+# Custom auto-refresh interval (10 seconds)
+.venv/bin/python tui/tui_viewer.py . --refresh 10
+
+# Disable auto-refresh (manual only via `r` key)
+.venv/bin/python tui/tui_viewer.py . --refresh 0
 ```
 
 Inside `tui_viewer.py`, any `subprocess.run()` calls to `tools/` scripts must also use the venv Python (see the Tool Runner section above).

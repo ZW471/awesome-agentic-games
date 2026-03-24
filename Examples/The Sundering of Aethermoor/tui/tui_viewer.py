@@ -30,7 +30,7 @@ import pyte
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll, Container
-from textual.events import Key
+from textual.events import Key, Paste, MouseDown, MouseMove, MouseUp
 from textual.reactive import reactive
 from textual.widgets import (
     Header,
@@ -111,6 +111,18 @@ class EnhancedScreen(pyte.HistoryScreen):
             self._in_alternate = False
             self.dirty.update(range(self.lines))
 
+    # pyte's CSI dispatcher passes private=True for '?' prefixed sequences,
+    # but several Screen methods don't accept that kwarg. Override them to
+    # absorb the extra keyword so the parser doesn't crash on sequences
+    # emitted by modern shells and tools (e.g., opencode, kitty, ghostty).
+    def report_device_status(self, *args, **kwargs):
+        kwargs.pop("private", None)
+        super().report_device_status(*args, **kwargs)
+
+    def report_device_attributes(self, *args, **kwargs):
+        kwargs.pop("private", None)
+        super().report_device_attributes(*args, **kwargs)
+
     def prev_page(self):
         if not self._in_alternate:
             super().prev_page()
@@ -142,6 +154,10 @@ class PtyTerminal(Static, can_focus=True):
         self._pty_screen: EnhancedScreen | None = None
         self._pty_stream: pyte.Stream | None = None
         self._reader_running = False
+        # Selection state for copy support
+        self._sel_start: tuple[int, int] | None = None  # (x, y)
+        self._sel_end: tuple[int, int] | None = None    # (x, y)
+        self._selecting = False
 
     def on_mount(self) -> None:
         cols = max(self.size.width - 2, 10)
@@ -227,9 +243,134 @@ class PtyTerminal(Static, can_focus=True):
         if self._reader_running:
             self.set_timer(0.02, self._poll_pty)
 
+    def _write_bytes(self, data: bytes) -> None:
+        """Write raw bytes to the PTY master fd."""
+        if self.master_fd is not None:
+            try:
+                os.write(self.master_fd, data)
+            except OSError:
+                pass
+
+    # ── Clipboard: Paste ──────────────────────────────────────────────────
+
+    def on_paste(self, event: Paste) -> None:
+        """Handle paste from system clipboard into the PTY.
+
+        If the shell has bracketed paste mode enabled (mode 2004), the pasted
+        text is wrapped in escape sequences so the shell knows it's a paste
+        and doesn't interpret special characters (like newlines) as commands.
+        """
+        if self.master_fd is None or not self.has_focus:
+            return
+        text = event.text
+        if not text:
+            return
+        # Bracketed paste mode: wrap so shell treats it as literal paste
+        bracketed = self._pty_screen and (2004 in self._pty_screen.mode)
+        payload = text.encode("utf-8")
+        if bracketed:
+            self._write_bytes(b"\x1b[200~" + payload + b"\x1b[201~")
+        else:
+            self._write_bytes(payload)
+        event.prevent_default()
+        event.stop()
+
+    # ── Clipboard: Mouse selection & Copy ─────────────────────────────────
+
+    def _sel_ordered(self) -> tuple[tuple[int, int], tuple[int, int]] | None:
+        """Return selection endpoints in reading order (top-left, bottom-right)."""
+        if self._sel_start is None or self._sel_end is None:
+            return None
+        s, e = self._sel_start, self._sel_end
+        if (s[1], s[0]) > (e[1], e[0]):
+            s, e = e, s
+        return s, e
+
+    def _is_selected(self, x: int, y: int) -> bool:
+        """Check if cell (x, y) is within the current selection."""
+        sel = self._sel_ordered()
+        if sel is None:
+            return False
+        (sx, sy), (ex, ey) = sel
+        if sy == ey:
+            return y == sy and sx <= x <= ex
+        if y == sy:
+            return x >= sx
+        if y == ey:
+            return x <= ex
+        return sy < y < ey
+
+    def _get_selected_text(self) -> str:
+        """Extract the text content of the current selection from pyte buffer."""
+        sel = self._sel_ordered()
+        if sel is None or self._pty_screen is None:
+            return ""
+        (sx, sy), (ex, ey) = sel
+        lines = []
+        for row in range(sy, ey + 1):
+            line_buf = self._pty_screen.buffer[row]
+            start = sx if row == sy else 0
+            end = ex if row == ey else self._pty_screen.columns - 1
+            chars = []
+            col = start
+            while col <= end:
+                ch = line_buf[col].data
+                if ch:
+                    chars.append(ch)
+                    eaw = unicodedata.east_asian_width(ch)
+                    col += 2 if eaw in ('W', 'F') else 1
+                else:
+                    col += 1
+            lines.append("".join(chars).rstrip())
+        return "\n".join(lines)
+
+    def _clear_selection(self) -> None:
+        if self._sel_start is not None:
+            self._sel_start = None
+            self._sel_end = None
+            self._selecting = False
+            self.refresh()
+
+    def on_mouse_down(self, event: MouseDown) -> None:
+        if event.button == 1:
+            # Left click: start a new selection
+            self._sel_start = (event.x, event.y)
+            self._sel_end = (event.x, event.y)
+            self._selecting = True
+            self.capture_mouse()
+            self.refresh()
+            event.stop()
+
+    def on_mouse_move(self, event: MouseMove) -> None:
+        if self._selecting and self._pty_screen:
+            # Clamp to screen bounds
+            x = max(0, min(event.x, self._pty_screen.columns - 1))
+            y = max(0, min(event.y, self._pty_screen.lines - 1))
+            self._sel_end = (x, y)
+            self.refresh()
+            event.stop()
+
+    def on_mouse_up(self, event: MouseUp) -> None:
+        if event.button == 1 and self._selecting:
+            self._selecting = False
+            self.release_mouse()
+            # If start == end, it was just a click — clear selection, don't copy
+            if self._sel_start == self._sel_end:
+                self._clear_selection()
+                return
+            text = self._get_selected_text()
+            if text:
+                self.app.copy_to_clipboard(text)
+                self.app.notify("Copied to clipboard", timeout=1.5)
+            event.stop()
+
     def on_key(self, event: Key) -> None:
         if self.master_fd is None or not self.has_focus:
             return
+
+        # Any keypress clears the visual selection
+        if self._sel_start is not None:
+            self._clear_selection()
 
         # Scrollback navigation (don't send to PTY)
         if event.key == "shift+pageup" and self._pty_screen:
@@ -296,6 +437,7 @@ class PtyTerminal(Static, can_focus=True):
         if self._pty_screen is None or y >= self._pty_screen.lines:
             return Strip.blank(self.size.width)
 
+        has_selection = self._sel_start is not None and self._sel_end is not None
         segments = []
         line = self._pty_screen.buffer[y]
         x = 0
@@ -308,9 +450,6 @@ class PtyTerminal(Static, can_focus=True):
                 continue
             fg_color = None
             bg_color = None
-            bold = char_data.bold
-            italic = char_data.italics
-            underline = char_data.underscore
 
             fg = char_data.fg
             if fg and fg != "default":
@@ -325,18 +464,31 @@ class PtyTerminal(Static, can_focus=True):
                 and x == self._pty_screen.cursor.x
             )
 
+            selected = has_selection and self._is_selected(x, y)
+
             # XOR: if char is reverse AND cursor is here, they cancel out
             effective_reverse = char_data.reverse ^ is_cursor
 
-            style = RichStyle(
-                color=fg_color,
-                bgcolor=bg_color,
-                bold=bold,
-                italic=italic,
-                underline=underline,
-                strike=char_data.strikethrough,
-                reverse=effective_reverse,
-            )
+            if selected:
+                # Selection highlight: white text on blue background
+                style = RichStyle(
+                    color="white",
+                    bgcolor="#354a6d",
+                    bold=char_data.bold,
+                    italic=char_data.italics,
+                    underline=char_data.underscore,
+                    strike=char_data.strikethrough,
+                )
+            else:
+                style = RichStyle(
+                    color=fg_color,
+                    bgcolor=bg_color,
+                    bold=char_data.bold,
+                    italic=char_data.italics,
+                    underline=char_data.underscore,
+                    strike=char_data.strikethrough,
+                    reverse=effective_reverse,
+                )
             segments.append(Segment(ch, style))
 
             # Skip stub cell for wide (2-cell) characters
@@ -1405,10 +1557,11 @@ class AethermoorTUI(App):
         Binding("8", "tab_log", "Log", show=False),
     ]
 
-    def __init__(self, game_dir: str, with_terminal: bool = True):
+    def __init__(self, game_dir: str, with_terminal: bool = True, auto_refresh: float = 5.0):
         super().__init__()
         self.game_dir = game_dir
         self.with_terminal = with_terminal
+        self.auto_refresh_interval = auto_refresh
         self.parser = SessionParser(game_dir)
         self.session_data = {}
         self.CSS = make_css(with_terminal)
@@ -1516,7 +1669,9 @@ class AethermoorTUI(App):
 
         return t
 
-    def on_ready(self) -> None:
+    def on_mount(self) -> None:
+        if self.auto_refresh_interval > 0:
+            self.set_interval(self.auto_refresh_interval, self._periodic_refresh)
         if self.with_terminal:
             try:
                 terminal = self.query_one("#game-terminal", PtyTerminal)
@@ -1557,14 +1712,16 @@ class AethermoorTUI(App):
 
     def action_refresh(self) -> None:
         self.session_data = self.parser.parse_all()
-        # Push new data into every panel widget and re-render
+        # Push new data into every panel widget and re-render.
+        # layout=True is required so VerticalScroll parents recalculate
+        # when content size changes (e.g., new log entries added).
         for widget in self.query(
             "CharacterPanel, WorldPanel, LocationPanel, "
             "InventoryPanel, CompanionsPanel, QuestsPanel, "
             "NPCPanel, LogPanel, SettingsPanel"
         ):
             widget.data = self.session_data
-            widget.refresh()
+            widget.refresh(layout=True)
         # Update the top status bar
         player = self.session_data.get("player", {})
         world = self.session_data.get("world", {})
@@ -1575,6 +1732,25 @@ class AethermoorTUI(App):
         except NoMatches:
             pass
         self.notify("Session data refreshed!")
+
+    def _periodic_refresh(self) -> None:
+        """Silent auto-refresh — same as action_refresh but without the notification toast."""
+        self.session_data = self.parser.parse_all()
+        for widget in self.query(
+            "CharacterPanel, WorldPanel, LocationPanel, "
+            "InventoryPanel, CompanionsPanel, QuestsPanel, "
+            "NPCPanel, LogPanel, SettingsPanel"
+        ):
+            widget.data = self.session_data
+            widget.refresh(layout=True)
+        player = self.session_data.get("player", {})
+        world = self.session_data.get("world", {})
+        try:
+            self.query_one("#top-bar", Static).update(
+                self._make_top_bar(player, world)
+            )
+        except NoMatches:
+            pass
 
     def action_focus_dice(self) -> None:
         try:
@@ -1633,6 +1809,12 @@ def main():
         default="true",
         help="Enable or disable the integrated PTY terminal panel (default: true)",
     )
+    parser.add_argument(
+        "--refresh",
+        type=float,
+        default=5.0,
+        help="Auto-refresh interval in seconds (default: 5). Set to 0 to disable auto-refresh.",
+    )
     args = parser.parse_args()
 
     if args.game_dir:
@@ -1655,7 +1837,7 @@ def main():
         print("The TUI will show empty panels. Start a game first to populate session data.")
 
     with_terminal = args.terminal == "true"
-    app = AethermoorTUI(game_dir, with_terminal=with_terminal)
+    app = AethermoorTUI(game_dir, with_terminal=with_terminal, auto_refresh=args.refresh)
     app.run()
 
 
