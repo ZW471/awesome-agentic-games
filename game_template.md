@@ -47,6 +47,7 @@ Only after the player confirms the plan, generate all game files following the d
 8. `NEW GAME.md`, `LOAD GAME.md`, `SAVE GAME.md`, `RESUME.md` — player entry points.
 9. **Python environment** — run `uv venv` in the game root, then `uv pip install` any packages needed by `tools/` scripts or the TUI.
 10. `tui/tui_viewer.py` — TUI viewer, if the player requested one (follow `tui_template.md`).
+11. `README.md` — player-facing documentation (see the `README.md` section below for required content).
 
 ---
 
@@ -54,10 +55,11 @@ Only after the player confirms the plan, generate all game files following the d
 
 ```
 <game_root>/
+├── README.md              # Game documentation and quick-start guide
 ├── NEW GAME.md            # Player entry point: start a new game
+├── RESUME.md              # Player entry point: resume the current session
 ├── LOAD GAME.md           # Player entry point: load an existing save
 ├── SAVE GAME.md           # Player entry point: save the current session
-├── RESUME.md              # Player entry point: resume the current session
 ├── .venv/                 # Python virtual environment (created during setup)
 ├── game/                  # Game definition (read-only during play)
 │   ├── init.md
@@ -307,7 +309,7 @@ Contains named snapshots of the `session/` folder.
 
 If the player requests a TUI viewer during game creation, generate `tui/tui_viewer.py` following the specification in **`tui_template.md`** (located in the repository root alongside this file).
 
-The TUI is a Textual-based terminal application that provides a tabbed dashboard for viewing all session state. It is a **read-only viewer** — it reads `session/` files but does not modify them. The agent remains the sole writer of game state.
+The TUI is a Textual-based terminal application that provides an interactive split-screen experience for playing the game directly in the terminal. One side embeds a terminal for interacting with the AI agent, while the other displays a tabbed dashboard showing all session state — character stats, inventory, map, quests, and more — updated in real time.
 
 Key points for the creating agent:
 
@@ -315,8 +317,32 @@ Key points for the creating agent:
 - The TUI's parser must match the session file schema defined in `game/sessions.md`. Every file the game writes to `session/` should have a corresponding parser method and display panel.
 - The TUI can invoke tools from `tools/` (e.g., dice roller) for player convenience.
 - The player refreshes the TUI (press `r`) after the agent processes each turn to see updated state.
+- The TUI includes an embedded pseudo-terminal (PTY) so the player can talk to the agent without leaving the game interface.
 
 See `tui_template.md` for the full specification including parser design, widget conventions, color schemes, and keyboard shortcuts.
+
+---
+
+## `README.md` — Game Documentation
+
+Every game must include a `README.md` at its root that serves as the player's introduction and quick-start guide. The creating agent must generate this file as the final step of game creation.
+
+The README should include:
+
+### Required Sections
+
+1. **Title & tagline** — The game name and a one-line hook.
+2. **Background** — A brief, spoiler-light summary of the game's setting, premise, and tone (2–3 paragraphs). Enough to get the player excited without revealing key plot points.
+3. **How to Play** — Two subsections:
+   - **With the TUI** — How to launch the TUI viewer (`cd` into the game folder, run the TUI command). Mention what the TUI shows and how to refresh it.
+   - **With an AI Agent** — How to start a conversation-based game (tell the agent to read `NEW GAME.md`). List compatible agents.
+4. **Game Lifecycle** — A table or list of the four entry points (`NEW GAME.md`, `RESUME.md`, `LOAD GAME.md`, `SAVE GAME.md`) and what each does.
+5. **Game Features** — Bullet list of key mechanics (e.g., character classes, combat system, companion system, world exploration).
+6. **Settings** — Brief note on how to customize difficulty, narrative style, etc. via `settings/custom.json`.
+
+### Tone
+
+Write the README as if it's the back cover of a game box — evocative but concise. Match the game's tone (e.g., dark and dramatic for a dark fantasy, playful for a comedy).
 
 ---
 

@@ -23,13 +23,34 @@ Agentic games work with any AI coding assistant that can read and write files:
 
 ## How to Play
 
+There are two ways to play an agentic game:
+
+### Option 1: TUI (Terminal UI)
+
+Each game includes an interactive **TUI viewer** — a terminal application that lets you play the game directly in your terminal. The TUI provides a split-screen experience: an embedded terminal on one side for interacting with the AI agent, and a tabbed dashboard on the other showing your character stats, inventory, map, quests, and more — all updated in real time.
+
+```bash
+cd Examples/The\ Sundering\ of\ Aethermoor/
+.venv/bin/python tui/tui_viewer.py . --terminal true
+```
+
+### Option 2: Agent Conversation
+
+You can also play entirely through conversation with your AI coding agent:
+
 1. Clone this repo (or copy one of the example games into your working directory).
 2. Open the game folder in your agent of choice.
 3. Tell the agent: **"Read `NEW GAME.md` and follow the instructions."**
 4. That's it. You're playing.
 
-To save your progress: tell the agent to read `SAVE GAME.md`.
-To resume later: tell the agent to read `LOAD GAME.md`.
+### Game Lifecycle
+
+| Command | Description |
+|---------|-------------|
+| `NEW GAME.md` | Start a new game |
+| `RESUME.md` | Resume the current in-progress session (quickest way back in) |
+| `LOAD GAME.md` | Load a previously saved game |
+| `SAVE GAME.md` | Save your current progress |
 
 ## Creating Your Own Game
 
@@ -64,12 +85,14 @@ game_template.md          # The template spec — read this to create new games
 Examples/
 ├── The Sundering of Aethermoor/
 │   ├── NEW GAME.md       # Start a new game
+│   ├── RESUME.md         # Resume current session
 │   ├── LOAD GAME.md      # Load a saved game
 │   ├── SAVE GAME.md      # Save your progress
 │   ├── game/             # World, lore, NPCs, session schema
 │   ├── agent/            # Agent behavior rules
 │   ├── settings/         # Game configuration
 │   ├── tools/            # Python helpers (e.g., dice roller)
+│   ├── tui/              # Terminal UI viewer
 │   ├── session/          # Live game state (created at runtime)
 │   └── saves/            # Saved playthroughs
 └── Rise of Empires/
