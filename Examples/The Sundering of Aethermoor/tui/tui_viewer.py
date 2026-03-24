@@ -6,22 +6,31 @@ A Textual-based terminal UI for viewing and interacting with
 agentic game sessions. Built for The Sundering of Aethermoor.
 
 Usage:
-    python tui_viewer.py [game_directory]
+    python tui_viewer.py [game_directory] [--terminal true|false]
 
 If no directory is provided, uses the current directory.
+Use --terminal false to disable the integrated PTY terminal panel.
 """
 
+import argparse
+import copy
+import fcntl
 import json
 import os
+import pty
 import re
-import sys
+import struct
 import subprocess
+import termios
+import unicodedata
 from pathlib import Path
 from typing import Optional
 
+import pyte
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll, Container
+from textual.events import Key
 from textual.reactive import reactive
 from textual.widgets import (
     Header,
@@ -38,11 +47,333 @@ from textual.widgets import (
     Markdown,
 )
 from textual.css.query import NoMatches
+from textual.strip import Strip
+from rich.segment import Segment
+from rich.style import Style as RichStyle
 from rich.text import Text
 from rich.panel import Panel
 from rich.table import Table
 from rich.console import Group
 from rich.markup import escape
+
+
+# ─── PTY Terminal Widget ─────────────────────────────────────────────────────
+
+PYTE_TO_RICH_COLORS = {
+    "black": "black", "red": "red", "green": "green", "brown": "yellow",
+    "blue": "blue", "magenta": "magenta", "cyan": "cyan", "white": "white",
+    "brightblack": "bright_black", "brightred": "bright_red",
+    "brightgreen": "bright_green", "brightyellow": "bright_yellow",
+    "brightblue": "bright_blue", "brightmagenta": "bright_magenta",
+    "brightcyan": "bright_cyan", "brightwhite": "bright_white",
+}
+
+
+class EnhancedScreen(pyte.HistoryScreen):
+    """HistoryScreen with alternate screen buffer (modes 47/1047/1049)."""
+
+    def __init__(self, columns, lines, history=1000, ratio=0.5):
+        super().__init__(columns, lines, history=history, ratio=ratio)
+        self._saved_buffer = None
+        self._saved_cursor = None
+        self._saved_history = None
+        self._in_alternate = False
+
+    def set_mode(self, *modes, **kwargs):
+        if kwargs.get("private"):
+            for mode in modes:
+                if mode in (47, 1047, 1049):
+                    self._enter_alternate()
+                    break
+        super().set_mode(*modes, **kwargs)
+
+    def reset_mode(self, *modes, **kwargs):
+        if kwargs.get("private"):
+            for mode in modes:
+                if mode in (47, 1047, 1049):
+                    self._leave_alternate()
+                    break
+        super().reset_mode(*modes, **kwargs)
+
+    def _enter_alternate(self):
+        if not self._in_alternate:
+            self._saved_buffer = copy.deepcopy(self.buffer)
+            self._saved_cursor = copy.copy(self.cursor)
+            self._saved_history = copy.deepcopy(self.history)
+            self.erase_in_display(2)
+            self._in_alternate = True
+
+    def _leave_alternate(self):
+        if self._in_alternate:
+            self.buffer = self._saved_buffer
+            self.cursor = self._saved_cursor
+            self.history = self._saved_history
+            self._in_alternate = False
+            self.dirty.update(range(self.lines))
+
+    def prev_page(self):
+        if not self._in_alternate:
+            super().prev_page()
+
+    def next_page(self):
+        if not self._in_alternate:
+            super().next_page()
+
+
+class PtyTerminal(Static, can_focus=True):
+    """A terminal widget that embeds a real PTY shell using pyte."""
+
+    DEFAULT_CSS = """
+    PtyTerminal {
+        height: 1fr;
+        width: 1fr;
+        border: solid grey;
+    }
+    PtyTerminal:focus {
+        border: solid $accent;
+    }
+    """
+
+    def __init__(self, command: str = "bash", **kwargs):
+        super().__init__(**kwargs)
+        self.command = command
+        self.master_fd: int | None = None
+        self._process: subprocess.Popen | None = None
+        self._pty_screen: EnhancedScreen | None = None
+        self._pty_stream: pyte.Stream | None = None
+        self._reader_running = False
+
+    def on_mount(self) -> None:
+        cols = max(self.size.width - 2, 10)
+        rows = max(self.size.height - 2, 5)
+        self._pty_screen = EnhancedScreen(cols, rows)
+        self._pty_stream = pyte.Stream(self._pty_screen)
+
+    def start(self) -> None:
+        """Spawn a shell in a PTY using subprocess.Popen."""
+        master_fd, slave_fd = pty.openpty()
+        self.master_fd = master_fd
+
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        env["COLUMNS"] = str(self._pty_screen.columns if self._pty_screen else 80)
+        env["LINES"] = str(self._pty_screen.lines if self._pty_screen else 24)
+
+        self._process = subprocess.Popen(
+            [self.command],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            env=env,
+            preexec_fn=os.setsid,
+            close_fds=True,
+        )
+        os.close(slave_fd)
+
+        # Set master to non-blocking
+        flags = fcntl.fcntl(self.master_fd, fcntl.F_GETFL)
+        fcntl.fcntl(self.master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+        # Relay pyte's device attribute responses back to the PTY
+        _master = self.master_fd
+        def _write_to_pty(data):
+            try:
+                os.write(_master, data.encode("utf-8"))
+            except OSError:
+                pass
+        if self._pty_screen:
+            self._pty_screen.write_process_input = _write_to_pty
+
+        self._reader_running = True
+        self._poll_pty()
+
+    def _resize_pty(self, cols: int, rows: int) -> None:
+        if self.master_fd is not None and self._pty_screen is not None:
+            self._pty_screen.resize(rows, cols)
+            try:
+                winsize = struct.pack("HHHH", rows, cols, 0, 0)
+                fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, winsize)
+            except OSError:
+                pass
+
+    def on_resize(self, event) -> None:
+        self._trigger_resize()
+
+    def on_focus(self, event) -> None:
+        self._trigger_resize()
+
+    def on_blur(self, event) -> None:
+        self._trigger_resize()
+
+    def _trigger_resize(self) -> None:
+        cols = max(self.size.width - 2, 10)
+        rows = max(self.size.height - 2, 5)
+        if self._pty_screen and (cols != self._pty_screen.columns or rows != self._pty_screen.lines):
+            self._resize_pty(cols, rows)
+
+    def _poll_pty(self) -> None:
+        """Read available data from the PTY and feed it to pyte."""
+        if not self._reader_running or self.master_fd is None:
+            return
+        try:
+            data = os.read(self.master_fd, 65536)
+            if data:
+                self._pty_stream.feed(data.decode("utf-8", errors="replace"))
+                if self._pty_screen.dirty:
+                    self.refresh()
+                    self._pty_screen.dirty.clear()
+        except (OSError, BlockingIOError):
+            pass
+        if self._reader_running:
+            self.set_timer(0.02, self._poll_pty)
+
+    def on_key(self, event: Key) -> None:
+        if self.master_fd is None or not self.has_focus:
+            return
+
+        # Scrollback navigation (don't send to PTY)
+        if event.key == "shift+pageup" and self._pty_screen:
+            self._pty_screen.prev_page()
+            self.refresh()
+            event.prevent_default()
+            event.stop()
+            return
+        if event.key == "shift+pagedown" and self._pty_screen:
+            self._pty_screen.next_page()
+            self.refresh()
+            event.prevent_default()
+            event.stop()
+            return
+
+        # Check if cursor keys are in application mode (DECCKM, private mode 1)
+        app_cursor = self._pty_screen and (32 in self._pty_screen.mode)
+
+        key_map = {
+            "enter": "\r", "escape": "\x1b", "tab": "\t",
+            "shift+tab": "\x1b[Z",
+            "backspace": "\x7f", "delete": "\x1b[3~",
+            "up": "\x1bOA" if app_cursor else "\x1b[A",
+            "down": "\x1bOB" if app_cursor else "\x1b[B",
+            "right": "\x1bOC" if app_cursor else "\x1b[C",
+            "left": "\x1bOD" if app_cursor else "\x1b[D",
+            "home": "\x1b[H", "end": "\x1b[F",
+            "insert": "\x1b[2~",
+            "pageup": "\x1b[5~", "pagedown": "\x1b[6~",
+            "f1": "\x1bOP", "f2": "\x1bOQ", "f3": "\x1bOR", "f4": "\x1bOS",
+            "f5": "\x1b[15~", "f6": "\x1b[17~", "f7": "\x1b[18~",
+            "f8": "\x1b[19~", "f9": "\x1b[20~", "f10": "\x1b[21~",
+            "f11": "\x1b[23~", "f12": "\x1b[24~",
+        }
+
+        char = key_map.get(event.key)
+        if char is None:
+            if event.key.startswith("ctrl+") and len(event.key) == 6:
+                ch = event.key[-1]
+                char = chr(ord(ch) - ord('a') + 1)
+            elif event.character:
+                char = event.character
+            else:
+                return
+
+        try:
+            os.write(self.master_fd, char.encode("utf-8"))
+        except OSError:
+            pass
+        event.prevent_default()
+        event.stop()
+
+    def get_content_width(self, container, viewport):
+        if self._pty_screen:
+            return self._pty_screen.columns
+        return container.width
+
+    def get_content_height(self, container, viewport, width):
+        if self._pty_screen:
+            return self._pty_screen.lines
+        return container.height
+
+    def render_line(self, y: int) -> Strip:
+        if self._pty_screen is None or y >= self._pty_screen.lines:
+            return Strip.blank(self.size.width)
+
+        segments = []
+        line = self._pty_screen.buffer[y]
+        x = 0
+        while x < self._pty_screen.columns:
+            char_data = line[x]
+            ch = char_data.data
+            if not ch:
+                # Stub cell from wide character — skip
+                x += 1
+                continue
+            fg_color = None
+            bg_color = None
+            bold = char_data.bold
+            italic = char_data.italics
+            underline = char_data.underscore
+
+            fg = char_data.fg
+            if fg and fg != "default":
+                fg_color = PYTE_TO_RICH_COLORS.get(fg, f"#{fg}" if len(fg) == 6 and all(c in "0123456789abcdefABCDEF" for c in fg) else fg)
+            bg = char_data.bg
+            if bg and bg != "default":
+                bg_color = PYTE_TO_RICH_COLORS.get(bg, f"#{bg}" if len(bg) == 6 and all(c in "0123456789abcdefABCDEF" for c in bg) else bg)
+
+            is_cursor = (
+                self.has_focus
+                and y == self._pty_screen.cursor.y
+                and x == self._pty_screen.cursor.x
+            )
+
+            # XOR: if char is reverse AND cursor is here, they cancel out
+            effective_reverse = char_data.reverse ^ is_cursor
+
+            style = RichStyle(
+                color=fg_color,
+                bgcolor=bg_color,
+                bold=bold,
+                italic=italic,
+                underline=underline,
+                strike=char_data.strikethrough,
+                reverse=effective_reverse,
+            )
+            segments.append(Segment(ch, style))
+
+            # Skip stub cell for wide (2-cell) characters
+            eaw = unicodedata.east_asian_width(ch)
+            x += 2 if eaw in ('W', 'F') else 1
+
+        return Strip(segments, self._pty_screen.columns)
+
+    def on_mouse_scroll_up(self, event) -> None:
+        if self._pty_screen:
+            self._pty_screen.prev_page()
+            self.refresh()
+            event.stop()
+
+    def on_mouse_scroll_down(self, event) -> None:
+        if self._pty_screen:
+            self._pty_screen.next_page()
+            self.refresh()
+            event.stop()
+
+    def cleanup(self) -> None:
+        self._reader_running = False
+        if self._process is not None:
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=2)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    self._process.kill()
+                except OSError:
+                    pass
+        if self.master_fd is not None:
+            try:
+                os.close(self.master_fd)
+            except OSError:
+                pass
+        self.master_fd = None
 
 
 # ─── Session Parser ───────────────────────────────────────────────────────────
@@ -991,7 +1322,9 @@ class DicePanel(Static):
 
 # ─── Main App ─────────────────────────────────────────────────────────────────
 
-GAME_CSS = """
+def make_css(with_terminal: bool) -> str:
+    """Generate the app CSS based on whether the terminal panel is enabled."""
+    base = """
 Screen {
     background: $surface;
 }
@@ -1025,12 +1358,34 @@ VerticalScroll {
     height: 1fr;
 }
 """
+    if with_terminal:
+        base += """
+#split-view {
+    height: 1fr;
+}
+
+#terminal-panel {
+    width: 50%;
+    height: 1fr;
+    border-right: solid grey;
+}
+
+#main-content {
+    width: 50%;
+    height: 1fr;
+}
+"""
+    else:
+        base += """
+#main-content {
+    height: 1fr;
+}
+"""
+    return base
 
 
 class AethermoorTUI(App):
     """The Sundering of Aethermoor — Game Session Viewer"""
-
-    CSS = GAME_CSS
 
     TITLE = "Agentic Game Session Viewer"
     SUB_TITLE = "The Sundering of Aethermoor"
@@ -1039,6 +1394,7 @@ class AethermoorTUI(App):
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("d", "focus_dice", "Dice Roller"),
+        Binding("t", "focus_terminal", "Terminal"),
         Binding("1", "tab_character", "Character", show=False),
         Binding("2", "tab_world", "World", show=False),
         Binding("3", "tab_location", "Location", show=False),
@@ -1049,11 +1405,13 @@ class AethermoorTUI(App):
         Binding("8", "tab_log", "Log", show=False),
     ]
 
-    def __init__(self, game_dir: str):
+    def __init__(self, game_dir: str, with_terminal: bool = True):
         super().__init__()
         self.game_dir = game_dir
+        self.with_terminal = with_terminal
         self.parser = SessionParser(game_dir)
         self.session_data = {}
+        self.CSS = make_css(with_terminal)
 
     def compose(self) -> ComposeResult:
         self.session_data = self.parser.parse_all()
@@ -1066,59 +1424,65 @@ class AethermoorTUI(App):
 
         yield Header()
 
-        with TabbedContent(
-            "Character",
-            "World",
-            "Location",
-            "Inventory",
-            "Quests",
-            "NPCs",
-            "Companions",
-            "Log",
-            "Dice",
-            "Settings",
-        ):
-            with TabPane("Character", id="tab-character"):
-                with VerticalScroll():
-                    yield CharacterPanel(self.session_data)
+        tabs_content = TabbedContent(
+            "Character", "World", "Location", "Inventory",
+            "Quests", "NPCs", "Companions", "Log", "Dice", "Settings",
+        )
 
-            with TabPane("World", id="tab-world"):
-                with VerticalScroll():
-                    yield WorldPanel(self.session_data)
-
-            with TabPane("Location", id="tab-location"):
-                with VerticalScroll():
-                    yield LocationPanel(self.session_data)
-
-            with TabPane("Inventory", id="tab-inventory"):
-                with VerticalScroll():
-                    yield InventoryPanel(self.session_data)
-
-            with TabPane("Quests", id="tab-quests"):
-                with VerticalScroll():
-                    yield QuestsPanel(self.session_data)
-
-            with TabPane("NPCs", id="tab-npcs"):
-                with VerticalScroll():
-                    yield NPCPanel(self.session_data)
-
-            with TabPane("Companions", id="tab-companions"):
-                with VerticalScroll():
-                    yield CompanionsPanel(self.session_data)
-
-            with TabPane("Log", id="tab-log"):
-                with VerticalScroll():
-                    yield LogPanel(self.session_data)
-
-            with TabPane("Dice", id="tab-dice"):
-                with VerticalScroll():
-                    yield DicePanel(self.game_dir)
-
-            with TabPane("Settings", id="tab-settings"):
-                with VerticalScroll():
-                    yield SettingsPanel(self.session_data)
+        if self.with_terminal:
+            with Horizontal(id="split-view"):
+                with Vertical(id="terminal-panel"):
+                    yield PtyTerminal(command="bash", id="game-terminal")
+                with Vertical(id="main-content"):
+                    with tabs_content:
+                        yield from self._compose_tab_panes()
+        else:
+            with Vertical(id="main-content"):
+                with tabs_content:
+                    yield from self._compose_tab_panes()
 
         yield Footer()
+
+    def _compose_tab_panes(self) -> ComposeResult:
+        with TabPane("Character", id="tab-character"):
+            with VerticalScroll():
+                yield CharacterPanel(self.session_data)
+
+        with TabPane("World", id="tab-world"):
+            with VerticalScroll():
+                yield WorldPanel(self.session_data)
+
+        with TabPane("Location", id="tab-location"):
+            with VerticalScroll():
+                yield LocationPanel(self.session_data)
+
+        with TabPane("Inventory", id="tab-inventory"):
+            with VerticalScroll():
+                yield InventoryPanel(self.session_data)
+
+        with TabPane("Quests", id="tab-quests"):
+            with VerticalScroll():
+                yield QuestsPanel(self.session_data)
+
+        with TabPane("NPCs", id="tab-npcs"):
+            with VerticalScroll():
+                yield NPCPanel(self.session_data)
+
+        with TabPane("Companions", id="tab-companions"):
+            with VerticalScroll():
+                yield CompanionsPanel(self.session_data)
+
+        with TabPane("Log", id="tab-log"):
+            with VerticalScroll():
+                yield LogPanel(self.session_data)
+
+        with TabPane("Dice", id="tab-dice"):
+            with VerticalScroll():
+                yield DicePanel(self.game_dir)
+
+        with TabPane("Settings", id="tab-settings"):
+            with VerticalScroll():
+                yield SettingsPanel(self.session_data)
 
     def _make_top_bar(self, player: dict, world: dict) -> Text:
         t = Text()
@@ -1151,6 +1515,23 @@ class AethermoorTUI(App):
         t.append(f"   Turn:{turn}", style="dim")
 
         return t
+
+    def on_ready(self) -> None:
+        if self.with_terminal:
+            try:
+                terminal = self.query_one("#game-terminal", PtyTerminal)
+                terminal.start()
+            except NoMatches:
+                pass
+
+    def action_focus_terminal(self) -> None:
+        if not self.with_terminal:
+            self.notify("Terminal is disabled. Restart with --terminal true to enable.")
+            return
+        try:
+            self.query_one("#game-terminal", PtyTerminal).focus()
+        except NoMatches:
+            pass
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "dice-input":
@@ -1225,12 +1606,37 @@ class AethermoorTUI(App):
     def action_tab_log(self) -> None:
         self._switch_tab("tab-log")
 
+    def on_unmount(self) -> None:
+        if self.with_terminal:
+            try:
+                terminal = self.query_one("#game-terminal", PtyTerminal)
+                terminal.cleanup()
+            except NoMatches:
+                pass
+
 
 # ─── Entry Point ──────────────────────────────────────────────────────────────
 
 def main():
-    if len(sys.argv) > 1:
-        game_dir = sys.argv[1]
+    parser = argparse.ArgumentParser(
+        description="The Sundering of Aethermoor — TUI Session Viewer",
+    )
+    parser.add_argument(
+        "game_dir",
+        nargs="?",
+        default=None,
+        help="Path to the game root directory (default: auto-detect from cwd)",
+    )
+    parser.add_argument(
+        "--terminal",
+        choices=["true", "false"],
+        default="true",
+        help="Enable or disable the integrated PTY terminal panel (default: true)",
+    )
+    args = parser.parse_args()
+
+    if args.game_dir:
+        game_dir = args.game_dir
     else:
         # Auto-detect game root: if run from inside tui/, look one level up
         cwd = Path(os.getcwd())
@@ -1248,7 +1654,8 @@ def main():
         print(f"Warning: No session/ directory found in {game_dir}")
         print("The TUI will show empty panels. Start a game first to populate session data.")
 
-    app = AethermoorTUI(game_dir)
+    with_terminal = args.terminal == "true"
+    app = AethermoorTUI(game_dir, with_terminal=with_terminal)
     app.run()
 
 
