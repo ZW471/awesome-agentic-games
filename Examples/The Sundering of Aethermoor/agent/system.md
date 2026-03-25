@@ -114,7 +114,7 @@ During gameplay, if `gameplay.auto_save_turns` is set (default: 10), the agent a
 
 At the start of any load or resume, verify the session is consistent:
 
-1. **Required files present:** Check that all required files from `game/sessions.md` exist in `session/`. If any are missing, attempt to reconstruct from context; if reconstruction is impossible, warn the player.
+1. **Required files present:** Check that all required files from `game/sessions.md` exist in `session/` (including `conversation.jsonl`). If any are missing, attempt to reconstruct from context; if reconstruction is impossible, warn the player. If `conversation.jsonl` is missing, create it as an empty file.
 
 2. **Void Corruption bounds:** Corruption must be between 0 and 100. If it reads above 100, set to 100 and trigger game-over check. If negative, set to 0.
 
@@ -163,6 +163,20 @@ When resuming a session (after loading), before presenting the scene:
 
 ---
 
+## Conversation Logging
+
+Every player input and every agent response must be appended to `session/conversation.jsonl` as separate JSON Lines entries. This file is **append-only** — the agent must never modify, delete, or rewrite existing lines.
+
+**Format (one JSON object per line):**
+```jsonl
+{"role": "user", "content": "I examine the Rift Gate.", "turn": 3, "timestamp": "2026-03-25T14:32:01Z"}
+{"role": "assistant", "content": "The Rift Gate shimmers with unstable energy...", "turn": 3, "timestamp": "2026-03-25T14:32:08Z"}
+```
+
+This creates a tamper-proof record of the entire conversation that can be reviewed in the TUI's Conversations tab and is included in save/load operations.
+
+---
+
 ## Session State Reference
 
 The agent must treat session files as the authoritative source of truth during gameplay. Always read from session files before narrating anything that depends on game state. Never rely on memory of what the state was — always read from files.
@@ -179,3 +193,4 @@ Key files and what they are authoritative for:
 | `session/npcs.json` | All encountered NPC states and dispositions |
 | `session/companions.json` | Active companion states |
 | `session/quests.json` | All quest states |
+| `session/conversation.jsonl` | Complete player–agent conversation history (append-only) |

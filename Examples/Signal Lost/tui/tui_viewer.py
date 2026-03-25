@@ -65,6 +65,7 @@ LABELS = {
         "tab_network": "NETWORK",
         "tab_world": "WORLD",
         "tab_log": "LOG",
+        "tab_conversations": "CHAT",
         "tab_tools": "TOOLS",
         "identity": "IDENTITY",
         "name": "Name",
@@ -121,6 +122,9 @@ LABELS = {
         "tool_cipher": "CIPHER",
         "tool_signal": "SIGNAL",
         "tool_map": "MAP",
+        "conversations": "Conversations",
+        "player_label": "PLAYER",
+        "agent_label": "AGENT",
         "empty": "(empty)",
         "no_data": "No data available",
         "safe": "SAFE",
@@ -139,6 +143,7 @@ LABELS = {
         "tab_network": "人脉",
         "tab_world": "世界",
         "tab_log": "日志",
+        "tab_conversations": "对话",
         "tab_tools": "工具",
         "identity": "身份",
         "name": "姓名",
@@ -195,6 +200,9 @@ LABELS = {
         "tool_cipher": "密码",
         "tool_signal": "信号",
         "tool_map": "地图",
+        "conversations": "对话记录",
+        "player_label": "玩家",
+        "agent_label": "引擎",
         "empty": "(空)",
         "no_data": "无数据",
         "safe": "安全",
@@ -1086,7 +1094,7 @@ class SessionParser:
             elif isinstance(d, str):
                 discovered.append({"id": d, "description": "", "turn_discovered": None})
 
-        return {"discovered": discovered}
+        return {"discovered": discovered, "total_discovered": len(discovered)}
 
     def parse_location(self) -> dict:
         raw = self._read_json(self.session_dir / "location.json")
@@ -1252,6 +1260,36 @@ class SessionParser:
 
         return entries
 
+    def parse_conversation(self) -> list[dict]:
+        """Read the append-only conversation.jsonl (JSON Lines format).
+
+        Handles malformed entries where a JSON object spans multiple lines
+        by accumulating lines until a valid JSON object is parsed.
+        """
+        path = self.session_dir / "conversation.jsonl"
+        entries = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                buffer = ""
+                for line in f:
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    if buffer:
+                        buffer += " " + stripped
+                    else:
+                        buffer = stripped
+                    try:
+                        entries.append(json.loads(buffer))
+                        buffer = ""
+                    except json.JSONDecodeError:
+                        # Might be a multi-line JSON object; keep accumulating
+                        continue
+                # If there's leftover in buffer, discard it (incomplete entry)
+        except (FileNotFoundError, PermissionError):
+            pass
+        return entries
+
     def parse_all(self) -> dict:
         result = {
             "player": self.parse_player(),
@@ -1262,6 +1300,7 @@ class SessionParser:
             "npcs": self.parse_npcs(),
             "world_state": self.parse_world_state(),
             "log": self.parse_log(),
+            "conversation": self.parse_conversation(),
         }
         return filter_hidden(result)
 
@@ -1984,6 +2023,50 @@ class LogPanel(Static):
         return Group(*parts)
 
 
+class ConversationPanel(Static):
+    """Displays the full player–agent conversation history from conversation.jsonl."""
+
+    def __init__(self, data: dict, lang: str = "en", **kwargs):
+        super().__init__(**kwargs)
+        self.data = data
+        self.lang = lang
+
+    def render(self) -> Group:
+        L = LABELS[self.lang]
+        entries = self.data.get("conversation", [])
+        parts = []
+
+        title = Text()
+        title.append(f"\n  ◈ {L.get('conversations', 'Conversations')}", style=f"bold {CLR_PRIMARY}")
+        parts.append(title)
+        parts.append(Text(""))
+
+        if not entries:
+            parts.append(Text(f"  {L['no_data']}", style=CLR_DIM))
+            return Group(*parts)
+
+        for entry in entries:
+            role = entry.get("role", "unknown")
+            content = entry.get("content", "")
+            turn = entry.get("turn", "?")
+
+            header = Text()
+            if role == "user":
+                header.append(f"  [T{turn}] ", style=f"bold {CLR_MUTED}")
+                header.append(f"▶ {L.get('player_label', 'PLAYER')}", style=f"bold {CLR_ACCENT}")
+            else:
+                header.append(f"  [T{turn}] ", style=f"bold {CLR_MUTED}")
+                header.append(f"◀ {L.get('agent_label', 'AGENT')}", style=f"bold {CLR_PRIMARY}")
+            parts.append(header)
+
+            for line in content.split("\n"):
+                parts.append(Text(f"    {line}", style=CLR_TEXT))
+
+            parts.append(Text(f"  {'- ' * 25}", style=CLR_DIM))
+
+        return Group(*parts)
+
+
 class ToolsPanel(Static):
     """Tools interface panel."""
 
@@ -2302,6 +2385,7 @@ class GameTUI(App):
                     L["tab_network"],
                     L["tab_world"],
                     L["tab_log"],
+                    L["tab_conversations"],
                     L["tab_tools"],
                     id="tabs",
                 ):
@@ -2329,6 +2413,9 @@ class GameTUI(App):
                     with TabPane(L["tab_log"], id="tab-log"):
                         with VerticalScroll():
                             yield LogPanel(self.session_data, self.lang, id="panel-log")
+                    with TabPane(L["tab_conversations"], id="tab-conversations"):
+                        with VerticalScroll():
+                            yield ConversationPanel(self.session_data, self.lang, id="panel-conversations")
                     with TabPane(L["tab_tools"], id="tab-tools"):
                         with VerticalScroll():
                             yield ToolsPanel(self.session_data, self.lang, id="panel-tools")
@@ -2378,6 +2465,7 @@ class GameTUI(App):
             "#panel-network": NetworkPanel,
             "#panel-world": WorldPanel,
             "#panel-log": LogPanel,
+            "#panel-conversations": ConversationPanel,
             "#panel-tools": ToolsPanel,
         }
 
@@ -2386,7 +2474,7 @@ class GameTUI(App):
                 widget = self.query_one(widget_id)
                 widget.data = self.session_data
                 widget.lang = self.lang
-                widget.refresh()
+                widget.refresh(layout=True)
             except NoMatches:
                 pass
 
@@ -2420,7 +2508,7 @@ class GameTUI(App):
             tab_ids = [
                 "tab-identity", "tab-knowledge", "tab-traces",
                 "tab-district", "tab-inventory", "tab-network",
-                "tab-world", "tab-log", "tab-tools",
+                "tab-world", "tab-log", "tab-conversations", "tab-tools",
             ]
             if 0 <= index < len(tab_ids):
                 tabs.active = tab_ids[index]

@@ -180,6 +180,7 @@ Typical session files include (but are game-specific):
 | `inventory.json` | Items the player is carrying |
 | `location.json` | Current location description and available exits/interactions |
 | `npcs.json` | NPCs currently present near the player and their states |
+| `conversation.jsonl` | Append-only log of all player–agent conversation turns |
 
 The exact files are defined per game in `sessions.md` — the above are examples, not requirements.
 
@@ -233,6 +234,32 @@ In this example, the TUI displays `public_data` but ignores `ending_trajectory` 
 - Hidden objects can contain any valid JSON — the TUI ignores the entire subtree.
 - When promoting hidden data to visible (e.g., a newly discovered district), strip any agent-internal fields (like `unlock` conditions) before adding to the visible portion.
 
+### Conversation Log (`session/conversation.jsonl`)
+
+Every game must track the full player–agent conversation in an **append-only** [JSON Lines](https://jsonlines.org/) file at `session/conversation.jsonl`. Each line is a self-contained JSON object representing one conversation turn.
+
+**Format (one JSON object per line):**
+```jsonl
+{"role": "user", "content": "I walk into the noodle shop and talk to Mira.", "turn": 5, "timestamp": "2026-03-25T14:32:01Z"}
+{"role": "assistant", "content": "The steam parts as you push through the bead curtain...", "turn": 5, "timestamp": "2026-03-25T14:32:08Z"}
+```
+
+**Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `role` | `"user"` or `"assistant"` | Who sent this message |
+| `content` | string | The full text of the message |
+| `turn` | integer | The game turn number at the time of the message |
+| `timestamp` | ISO 8601 string | When the message was sent |
+
+**Rules:**
+- **Append-only.** The agent must only append new lines to `conversation.jsonl`. It must never modify, delete, or rewrite existing lines. This preserves a tamper-proof record of the entire conversation.
+- **Every exchange is logged.** Every player input and every agent response must be appended as separate lines immediately when they occur.
+- **Created during initialization.** `game/init.md` must create `session/conversation.jsonl` as an empty file. The first entries are appended when the opening narration is presented and the player responds.
+- **Included in saves.** When the session is saved or loaded, `conversation.jsonl` is copied along with all other session files.
+- **Displayed in the TUI.** If the game has a TUI viewer, it should include a **Conversations** tab that displays the conversation history, showing player and agent messages in a chat-like format with turn numbers.
+
 ---
 
 ## `agent/` Folder — Agent Behavior Instructions
@@ -265,6 +292,7 @@ Defines the **in-session gameplay loop** — the rules the agent follows while t
 
 - Turn structure and progression (e.g., what happens each turn, phase order).
 - How to read and update files in `session/` in response to player actions.
+- Appending every player input and agent response to `session/conversation.jsonl` as part of the turn processing.
 - Game mechanics resolution (combat, skill checks, puzzles, etc.).
 - Narrative generation rules (tone, pacing, detail level).
 - Win/loss/end conditions.
@@ -403,7 +431,8 @@ Write the README as if it's the back cover of a game box — evocative but conci
 |-----------|------|
 | **UPPER CASE `.md`** | Root-level entry points invoked by the player |
 | **lowercase `.md`** | Game definition and agent instruction files |
-| **`.json` for session state** | All files in `session/` and `saves/` use JSON format for reliable TUI parsing |
+| **`.json` / `.jsonl` for session state** | All files in `session/` and `saves/` use JSON or JSON Lines format for reliable TUI parsing |
+| **`conversation.jsonl` is append-only** | The agent must only append new lines to the conversation log — never modify or delete existing entries |
 | **Player invokes** | Only `NEW GAME.md`, `LOAD GAME.md`, `SAVE GAME.md`, `RESUME.md` (via `@`) |
 | **Agent invokes** | `game/init.md` and any internal procedures — never directly by player |
 | **Read-only during play** | `game/`, `agent/`, `settings/default.json` |

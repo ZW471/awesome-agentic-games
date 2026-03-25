@@ -302,6 +302,9 @@ NPC entries follow this format when added:
 }
 ```
 
+### `session/conversation.jsonl`
+Create as an empty file. The first entries will be appended when the opening narration is presented and the player responds.
+
 ### `session/log.json`
 ```json
 {

@@ -16,8 +16,9 @@ Each player turn follows this sequence:
 6. **Increment turn counter** — Update `player.json` turn counter.
 7. **Check win/loss conditions** — Evaluate end conditions (see below).
 8. **Write log entry** — Append to `session/log.json`.
-9. **Auto-save check** — If turn count is divisible by `auto_save_turns`, save.
-10. **Present narrative** — Describe what happened and the current state of the scene. End with an implicit prompt for the next action.
+9. **Log conversation** — Append the player's input and the agent's response as separate lines to `session/conversation.jsonl`. Each line is a JSON object: `{"role": "user"|"assistant", "content": "...", "turn": N, "timestamp": "..."}`. This file is **append-only** — never modify or delete existing lines.
+10. **Auto-save check** — If turn count is divisible by `auto_save_turns`, save.
+11. **Present narrative** — Describe what happened and the current state of the scene. End with an implicit prompt for the next action.
 
 ---
 

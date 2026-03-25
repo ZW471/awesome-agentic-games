@@ -309,6 +309,32 @@ All quests: active and completed. Update when quests are received, progressed, o
 
 ---
 
+### `session/conversation.jsonl`
+
+An **append-only** [JSON Lines](https://jsonlines.org/) file that records every player–agent conversation turn. Each line is a self-contained JSON object. The agent must never modify or delete existing lines — only append new ones.
+
+**Format (one JSON object per line):**
+```jsonl
+{"role": "user", "content": "I examine the Rift Gate.", "turn": 3, "timestamp": "2026-03-25T14:32:01Z"}
+{"role": "assistant", "content": "The Rift Gate shimmers with unstable energy...", "turn": 3, "timestamp": "2026-03-25T14:32:08Z"}
+```
+
+**Fields:**
+| Field | Description |
+|-------|-------------|
+| role | `"user"` (player input) or `"assistant"` (agent response) |
+| content | The full text of the message |
+| turn | The game turn number at the time of the message |
+| timestamp | ISO 8601 timestamp of when the message was sent |
+
+**Update rules:**
+- Append every player input and every agent response as separate lines immediately when they occur
+- Never modify, delete, or rewrite existing lines (append-only)
+- Created as an empty file during initialization
+- Included in save/load operations alongside all other session files
+
+---
+
 ## Optional Session Files
 
 These files are created during play if relevant conditions are met.

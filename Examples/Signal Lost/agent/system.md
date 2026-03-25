@@ -120,7 +120,7 @@ When the player invokes `RESUME.md`:
 
 Perform these checks when loading or resuming a session:
 
-1. **File existence**: All 8 required session files must exist. If any are missing, reconstruct from available data or warn the player.
+1. **File existence**: All 9 required session files must exist (including `conversation.jsonl`). If any are missing, reconstruct from available data or warn the player. If `conversation.jsonl` is missing, create it as an empty file.
 2. **Bounds checking**:
    - Integrity: 0 ≤ current ≤ max (from difficulty settings)
    - NEXUS Alert: 0 ≤ value ≤ 100
@@ -239,6 +239,7 @@ All Python tools live in `tools/` and must be invoked with the game's venv Pytho
 
 After each turn, before presenting the next scene:
 
+0. **⚠️ CRITICAL: Check for new trace discoveries!** Read `session/traces.json` and `session/knowledge.json`. Compare what the player has learned against trace discovery conditions. If new traces are discovered, update `session/traces.json` immediately.
 1. Check NEXUS Alert thresholds:
    - 25%: NEXUS increases patrols in Sector 7 and Chrome Heights
    - 50%: Sector 7 goes to lockdown, Chrome Heights restricted
@@ -253,3 +254,17 @@ After each turn, before presenting the next scene:
 4. Check NPC status (alive, moved, changed disposition based on world events)
 5. Auto-save if due
 6. Apply any pending status effects
+
+---
+
+## Conversation Logging
+
+Every player input and every agent response must be appended to `session/conversation.jsonl` as separate JSON Lines entries. This file is **append-only** — the agent must never modify, delete, or rewrite existing lines.
+
+**Format (one JSON object per line):**
+```jsonl
+{"role": "user", "content": "I talk to Mira about the Signal.", "turn": 5, "timestamp": "2026-03-25T14:32:01Z"}
+{"role": "assistant", "content": "Mira's eyes narrow as you mention the Signal...", "turn": 5, "timestamp": "2026-03-25T14:32:08Z"}
+```
+
+This creates a tamper-proof record of the entire conversation that can be reviewed in the TUI's Conversations tab and is included in save/load operations.

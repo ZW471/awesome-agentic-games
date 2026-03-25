@@ -177,11 +177,32 @@ class SessionParser:
     def parse_npcs(self) -> list[dict]:    # Encountered NPCs
     def parse_quests(self) -> dict:        # Active + completed quests
     def parse_log(self) -> list[dict]:     # Session log entries
+    def parse_conversation(self) -> list[dict]:  # Conversation turns from conversation.jsonl
     def parse_settings(self) -> dict:      # Game settings (from settings/ dir)
     def parse_all(self) -> dict:           # Calls all of the above, applies filter_hidden()
 ```
 
 Each `parse_*()` method simply calls `self._read_json()` on the corresponding `.json` file and returns the result. Game-specific transformation (e.g., computing derived values, flattening nested structures for display) can be done in the method body or in the panel widget's `render()`.
+
+The `parse_conversation()` method is special: it reads `session/conversation.jsonl`, a JSON Lines file (one JSON object per line). Parse it line by line:
+
+```python
+def parse_conversation(self) -> list[dict]:
+    path = self.session_dir / "conversation.jsonl"
+    entries = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+    except (FileNotFoundError, PermissionError):
+        pass
+    return entries
+```
 
 Adapt this to the game's actual `sessions.md` schema. A strategy game might replace `parse_player` with `parse_faction` and `parse_resources`. A mystery game might add `parse_clues` and `parse_suspects`. Not every game will have all of these — add, rename, or remove methods to match what the game tracks.
 
@@ -308,6 +329,7 @@ The tab set should reflect the game's session file schema. Start from this basel
 | NPCs | All encountered NPCs with disposition, location, quest ties | `6` | Games with NPC interaction |
 | Companions | Party members with resource bars, abilities, status | `7` | Games with recruitable party members |
 | Log | Chronological session events, most recent first | `8` | Always — every game benefits from a turn log |
+| Conversations | Full player–agent conversation history in chat format | `9` | Always — every game tracks conversations in `conversation.jsonl` |
 | Dice/Tools | Interactive tool runner (dice roller, calculator, etc.) | `d` | Games that use `tools/` scripts |
 | Settings | Current game configuration display | — | Always — shows difficulty, preferences, etc. |
 
@@ -348,7 +370,7 @@ For games with multiple tools, the tab can include a tool selector or accept a p
 | `r` | Refresh all data from `session/` files |
 | `t` | Focus the integrated terminal (when `--terminal true`) |
 | `d` | Focus the tool runner input |
-| `1`-`8` | Switch directly to tabs 1-8 |
+| `1`-`9` | Switch directly to tabs 1-9 |
 
 **Note:** When the terminal is focused, all keys go to the shell. Click outside the terminal or press `Escape` first to use TUI shortcuts.
 
@@ -501,7 +523,7 @@ When building a TUI for a new game:
 1. **Copy `tui_template.py`** into the game's `tui/` folder and rename to `tui_viewer.py`.
 2. **Set up the venv** — run `uv venv` in the game root (if not already created for `tools/`), then `uv pip install textual pyte`.
 3. **Read `game/sessions.md`** to understand what files exist in `session/` and their schemas.
-4. **Customize the `SessionParser`** — write `parse_*()` methods for each session `.json` file. Since session files are JSON, each method is typically a simple `self._read_json()` call plus any game-specific transformation. Look for `CUSTOMIZE` markers in the template. Ensure `filter_hidden()` is applied in `parse_all()` so hidden fields are never passed to panel widgets.
+4. **Customize the `SessionParser`** — write `parse_*()` methods for each session `.json` file. Since session files are JSON, each method is typically a simple `self._read_json()` call plus any game-specific transformation. Add `parse_conversation()` for the JSONL conversation log. Look for `CUSTOMIZE` markers in the template. Ensure `filter_hidden()` is applied in `parse_all()` so hidden fields are never passed to panel widgets.
 5. **Choose which tabs to include** based on what data the game tracks. Add/remove `TabPane` entries in `_compose_tab_panes()`.
 6. **Customize panel widgets** — update each panel's `render()` method to display your game's data. Add new panel classes for game-specific tabs.
 7. **Match the visual theme** to the game's tone. A horror game might use red/grey; a lighthearted game might use brighter colors. The color tables above are starting points, not requirements.

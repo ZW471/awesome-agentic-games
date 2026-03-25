@@ -4,14 +4,27 @@ This file defines the in-session gameplay rules — the turn structure, knowledg
 
 ---
 
+## ⚠️ CRITICAL: After EVERY player action, you MUST check for new trace discoveries!
+
+**This is the most common error. After EVERY turn, before narrating the result, you MUST:**
+
+1. Read `session/traces.json` to see what traces have already been discovered
+2. Check the player's knowledge in `session/knowledge.json` 
+3. Compare what the player has learned against the trace discovery conditions below
+4. If a new trace is discovered, IMMEDIATELY update `session/traces.json` with the new discovery
+
+**If you forget to update traces, the game breaks. The player loses progress. Always check.**
+
+---
+
 ## Turn Structure
 
 Each player action constitutes one turn. On every turn, the agent must:
 
-1. **Read State**: Read relevant `session/` files (at minimum: `player.json`, `location.json`, `world_state.json`).
+1. **Read State**: Read relevant `session/` files (at minimum: `player.json`, `location.json`, `world_state.json`, `traces.json`, `knowledge.json`).
 2. **Validate Action**: Check if the action is possible given current state, location, and access.
 3. **Execute Action**: Process the action according to the rules below.
-4. **Check Knowledge Triggers**: After the action, check if any new traces should be discovered based on accumulated knowledge.
+4. **Check Knowledge Triggers**: After the action, check if any new traces should be discovered based on accumulated knowledge. **DO NOT SKIP THIS STEP.**
 5. **Update Session Files**: Write all changes to the appropriate `session/` files.
 6. **Advance World State**:
    - Increment turn count in `player.json`.
@@ -21,8 +34,9 @@ Each player action constitutes one turn. On every turn, the agent must:
    - Check world event triggers.
 7. **Check Consequence Triggers**: Check for death conditions, ending conditions, NPC events.
 8. **Log**: Add entry to `log.json`.
-9. **Auto-save**: If due (every `auto_save_turns` turns).
-10. **Narrate**: Present the result to the player in the appropriate narrative style.
+9. **Log Conversation**: Append the player's input and the agent's response as separate lines to `session/conversation.jsonl`. Each line is a JSON object: `{"role": "user"|"assistant", "content": "...", "turn": N, "timestamp": "..."}`. This file is **append-only** — never modify or delete existing lines. **CRITICAL: Each JSON entry MUST be a single line. Replace all literal newlines in the `content` field with `\n` escape sequences. Multi-line content in JSONL breaks the parser. Never write a JSON object that spans multiple lines in this file.**
+10. **Auto-save**: If due (every `auto_save_turns` turns).
+11. **Narrate**: Present the result to the player in the appropriate narrative style.
 
 ---
 

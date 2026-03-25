@@ -173,6 +173,9 @@ Use the template from `game/sessions.md`. Fill in starting inventory based on su
 
 **Plus subclass-specific equipment:** (listed in Step 3b)
 
+### Create `session/conversation.jsonl`
+Create as an empty file. The first entries will be appended when the opening narration is presented and the player responds.
+
 ### Create `session/log.json`
 
 Create with first entry:

@@ -708,6 +708,24 @@ class SessionParser:
     def parse_npc_defs(self) -> str:
         return self._read(self.game_data_dir / "npcs.md")
 
+    # ── Conversation ──────────────────────────────────────────────────────
+    def parse_conversation(self) -> list[dict]:
+        """Read the append-only conversation.jsonl (JSON Lines format)."""
+        path = self.session_dir / "conversation.jsonl"
+        entries = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            entries.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+        except (FileNotFoundError, PermissionError):
+            pass
+        return entries
+
     # ── Full parse ────────────────────────────────────────────────────────
     def parse_all(self) -> dict:
         result = {
@@ -719,6 +737,7 @@ class SessionParser:
             "npcs": self.parse_npcs(),
             "quests": self.parse_quests(),
             "log": self.parse_log(),
+            "conversation": self.parse_conversation(),
             "settings": self.parse_settings(),
         }
         return filter_hidden(result)
@@ -1248,6 +1267,41 @@ class LogPanel(Static):
         return Group(*parts)
 
 
+class ConversationPanel(Static):
+    """Displays the full player–agent conversation history from conversation.jsonl."""
+
+    def __init__(self, data: dict, **kwargs):
+        super().__init__(**kwargs)
+        self.data = data
+
+    def render(self) -> Group:
+        entries = self.data.get("conversation", [])
+        if not entries:
+            return Group(Text("No conversation yet.", style="dim italic"))
+
+        parts = []
+        for entry in entries:
+            role = entry.get("role", "unknown")
+            content = entry.get("content", "")
+            turn = entry.get("turn", "?")
+
+            header = Text()
+            if role == "user":
+                header.append(f"  [Turn {turn}] ", style="bold yellow")
+                header.append("▶ PLAYER", style="bold bright_cyan")
+            else:
+                header.append(f"  [Turn {turn}] ", style="bold yellow")
+                header.append("◀ AGENT", style="bold bright_green")
+            parts.append(header)
+
+            for line in content.split("\n"):
+                parts.append(Text(f"    {line}", style="white"))
+
+            parts.append(Text())
+
+        return Group(*parts)
+
+
 class SettingsPanel(Static):
     """Displays settings."""
 
@@ -1407,6 +1461,7 @@ class AethermoorTUI(App):
         Binding("6", "tab_npcs", "NPCs", show=False),
         Binding("7", "tab_companions", "Companions", show=False),
         Binding("8", "tab_log", "Log", show=False),
+        Binding("9", "tab_conversations", "Conversations", show=False),
     ]
 
     def __init__(self, game_dir: str, with_terminal: bool = True, auto_refresh: float = 5.0):
@@ -1431,7 +1486,8 @@ class AethermoorTUI(App):
 
         tabs_content = TabbedContent(
             "Character", "World", "Location", "Inventory",
-            "Quests", "NPCs", "Companions", "Log", "Dice", "Settings",
+            "Quests", "NPCs", "Companions", "Log", "Conversations",
+            "Dice", "Settings",
         )
 
         if self.with_terminal:
@@ -1480,6 +1536,10 @@ class AethermoorTUI(App):
         with TabPane("Log", id="tab-log"):
             with VerticalScroll():
                 yield LogPanel(self.session_data)
+
+        with TabPane("Conversations", id="tab-conversations"):
+            with VerticalScroll():
+                yield ConversationPanel(self.session_data)
 
         with TabPane("Dice", id="tab-dice"):
             with VerticalScroll():
@@ -1570,7 +1630,7 @@ class AethermoorTUI(App):
         for widget in self.query(
             "CharacterPanel, WorldPanel, LocationPanel, "
             "InventoryPanel, CompanionsPanel, QuestsPanel, "
-            "NPCPanel, LogPanel, SettingsPanel"
+            "NPCPanel, LogPanel, ConversationPanel, SettingsPanel"
         ):
             widget.data = self.session_data
             widget.refresh(layout=True)
@@ -1591,7 +1651,7 @@ class AethermoorTUI(App):
         for widget in self.query(
             "CharacterPanel, WorldPanel, LocationPanel, "
             "InventoryPanel, CompanionsPanel, QuestsPanel, "
-            "NPCPanel, LogPanel, SettingsPanel"
+            "NPCPanel, LogPanel, ConversationPanel, SettingsPanel"
         ):
             widget.data = self.session_data
             widget.refresh(layout=True)
@@ -1633,6 +1693,8 @@ class AethermoorTUI(App):
         self._switch_tab("tab-companions")
     def action_tab_log(self) -> None:
         self._switch_tab("tab-log")
+    def action_tab_conversations(self) -> None:
+        self._switch_tab("tab-conversations")
 
     def on_unmount(self) -> None:
         if self.with_terminal:

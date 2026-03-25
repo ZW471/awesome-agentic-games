@@ -472,6 +472,32 @@ Chronological event log. Keeps the last 30 entries. Older entries are trimmed wh
 
 ---
 
+### `session/conversation.jsonl`
+
+An **append-only** [JSON Lines](https://jsonlines.org/) file that records every player–agent conversation turn. Each line is a self-contained JSON object. The agent must never modify or delete existing lines — only append new ones.
+
+**Format (one JSON object per line):**
+```jsonl
+{"role": "user", "content": "I walk into the noodle shop and talk to Mira.", "turn": 5, "timestamp": "2026-03-25T14:32:01Z"}
+{"role": "assistant", "content": "The steam parts as you push through the bead curtain...", "turn": 5, "timestamp": "2026-03-25T14:32:08Z"}
+```
+
+**Fields:**
+| Field | Description |
+|-------|-------------|
+| role | `"user"` (player input) or `"assistant"` (agent response) |
+| content | The full text of the message |
+| turn | The game turn number at the time of the message |
+| timestamp | ISO 8601 timestamp of when the message was sent |
+
+**Update rules:**
+- Append every player input and every agent response as separate lines immediately when they occur
+- Never modify, delete, or rewrite existing lines (append-only)
+- Created as an empty file during initialization
+- Included in save/load operations alongside all other session files
+
+---
+
 ## Session Integrity Rules
 
 1. **Never delete session files** during active gameplay — only update them.
