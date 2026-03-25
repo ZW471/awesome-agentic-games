@@ -67,7 +67,7 @@ This repo includes two example games to get you started:
 | Game | Description |
 |------|-------------|
 | [The Sundering of Aethermoor](Examples/The%20Sundering%20of%20Aethermoor/) | A dark fantasy RPG — play as a Riftwalker in a world being torn apart by the Void |
-| [Rise of Empires](Examples/Rise%20of%20Empires/) | A civilization-building strategy game — guide your people from humble beginnings to greatness |
+| [Signal Lost](Examples/Signal%20Lost/) | A cyberpunk mystery — wake with no memory in Neo-Kowloon and follow the Signal to uncover layered truths |
 
 An example session of *The Sundering of Aethermoor*:
 

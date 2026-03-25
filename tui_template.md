@@ -140,6 +140,14 @@ Session files follow predictable markdown patterns. The parser uses regex to ext
 
 **Key principle:** The parser must be tolerant. If a file is missing or a field can't be found, return an empty dict or sensible default — never crash. Games may not populate all fields immediately, and different games will have different schemas.
 
+**Multilingual parsing:** When a game supports multiple languages, the agent may write session files with bilingual or localized labels (e.g., `**<localized> / Name:** <value>`, `## <localized> / Status Effects`, `## 【<localized> N】— Title [tag]`). Regex patterns must account for this:
+
+- **Field extraction** (`**Key:** Value`): Match the English key name anywhere within the bold label, not just at the start. Use `rf"\*\*[^*]*{re.escape(field)}[^*]*:\*\*\s*(.+)"` instead of `rf"\*\*{re.escape(field)}:\*\*\s*(.+)"`. This way `**<localized> / Name:**` matches when searching for `"Name"`.
+- **Section headings** (`## Heading`): Same approach — match the English heading anywhere in the line. Use `rf"##\s+[^\n]*{re.escape(heading)}[^\n]*\n"` instead of `rf"##\s+{re.escape(heading)}[^\n]*\n"`.
+- **Log turn markers** (`## [Turn N] — Title`): The agent may use localized bracket styles or keywords instead of the English `[Turn N]`. Use alternation patterns to match all expected variants and extract the turn number from whichever group matched.
+
+As a general rule: never assume labels, headings, or structural markers will be in English only. Anchor regex patterns on the English portion as a substring match within flexible surrounding content.
+
 ### Recommended Parser Methods
 
 The parser should provide one method per session file type. A typical RPG-style game might include:
@@ -171,6 +179,16 @@ Each tab in the TUI corresponds to one panel widget. Panels inherit from `textua
 ### Visual Conventions
 
 Use these consistently across games. Adapt labels, icons, and colors to fit the game's theme.
+
+#### Dark Background Visibility
+
+**Important:** Most terminals use dark backgrounds. Avoid font colors that are too dark to read against a dark background. As a rule of thumb:
+
+- **Muted/secondary text** should be no darker than `#8888aa` — colors like `#666688` or below become hard to read.
+- **Dim/empty state text** should be no darker than `#555577` — colors like `#333344` are nearly invisible on dark terminals.
+- **Background fills** (e.g., bar backgrounds, panel backgrounds) should be no darker than `#1a1a2e` — extremely dark values like `#0d0d1a` blend into the terminal background.
+- **Never apply Rich's `dim` style modifier to already-subdued colors** — it halves the brightness, making borderline colors invisible. Use `dim` only on bright colors (e.g., `dim white`, `dim cyan`), never on muted or grey tones.
+- When in doubt, test your color choices in a terminal with a dark background (e.g., `#000000` or `#1a1a2e`). If you have to squint, it's too dark.
 
 #### Progress Bars
 
