@@ -4,114 +4,113 @@ This document defines the required and optional files in the `session/` folder, 
 
 The agent must maintain these files as the authoritative record of game state. When in doubt about any game state, read the relevant session file — do not rely on memory.
 
+All session files use JSON format.
+
+---
+
+## Hidden Fields Convention
+
+Any JSON object containing `"hidden": true` must NOT be displayed to the player in the TUI. The TUI's parser applies a `filter_hidden()` function that recursively removes such objects from the data tree before rendering.
+
+**Hidden fields in this game:**
+
+- `world_state.json` > `void_corruption._thresholds` — internal corruption threshold rules and labels
+- `world_state.json` > `malachar_awareness._triggers` — internal awareness escalation trigger rules
+
+By convention, hidden field keys are prefixed with an underscore (e.g., `_thresholds`, `_triggers`) to make them visually distinct in the JSON, but the `"hidden": true` property is what controls filtering.
+
 ---
 
 ## Required Session Files
 
-### `session/player.md`
+### `session/player.json`
 
 The player character's complete state. Update after every event that changes any value.
 
 **Format:**
-```markdown
-# Player: [CHARACTER NAME]
-
-## Identity
-- **Name:** [name]
-- **Class:** Riftwalker ([subclass: Battlemage | Arcanist | Shadowweave])
-- **Save Name:** [save name]
-
-## Core Stats
-| Stat | Base | Current |
-|------|------|---------|
-| HP   | [max_hp] | [current_hp] |
-| MP   | [max_mp] | [current_mp] |
-| STR  | [str] | [str] |
-| INT  | [int] | [int] |
-| AGI  | [agi] | [agi] |
-
-**Rift Points:** [current] / [max]
-
-## Shards Collected
-- [ ] Emberveil Shard — *Flamestrike*
-- [ ] Thornwood Shard — *Barkskin*
-- [ ] Crystalmere Shard — *Frostbind*
-- [ ] Ashen Shard — *Wraithform*
-- [ ] Skyreach Shard — *Stormcall*
-
-## Active Abilities
-- **Rift Step** (passive): Can open Rift Gates between known Realms. Costs 1 Rift Point.
-- **Rift Sense** (passive): Can detect Shard energy and Void corruption nearby.
-- [Subclass abilities listed here]
-- [Shard abilities listed here as they are collected]
-
-## Status Effects
-[List active buffs/debuffs with duration, or "None"]
-
-## Turn Counter
-**Turns Elapsed:** [number]
+```json
+{
+  "name": "Character Name",
+  "class": "Riftwalker (Subclass)",
+  "save_name": "save_name",
+  "stats": {
+    "HP": {"base": 100, "current": 100},
+    "MP": {"base": 60, "current": 60},
+    "STR": {"base": 5, "current": 5},
+    "INT": {"base": 10, "current": 10},
+    "AGI": {"base": 8, "current": 8}
+  },
+  "rift_points": {"current": 10, "max": 10},
+  "shards_collected": [
+    {"name": "Emberveil Shard", "ability": "Flamestrike", "collected": false},
+    {"name": "Thornwood Shard", "ability": "Barkskin", "collected": false},
+    {"name": "Crystalmere Shard", "ability": "Frostbind", "collected": false},
+    {"name": "Ashen Shard", "ability": "Wraithform", "collected": false},
+    {"name": "Skyreach Shard", "ability": "Stormcall", "collected": false}
+  ],
+  "active_abilities": [
+    {"name": "Rift Step", "type": "passive", "cost": "1 Rift Point", "description": "Can open Rift Gates between known Realms."},
+    {"name": "Rift Sense", "type": "passive", "cost": null, "description": "Can detect Shard energy and Void corruption nearby."}
+  ],
+  "status_effects": [],
+  "turns": 0
+}
 ```
 
 **Update rules:**
 - Update HP/MP after every combat action or healing event
 - Update Rift Points after every Rift Gate use or restoration event
-- Add Shard abilities when a Shard is collected
+- Add Shard abilities to `active_abilities` and set `collected: true` in `shards_collected` when a Shard is collected
 - Update status effects at the start of each turn (decrement durations)
-- Increment Turns Elapsed at the end of every player turn
+- Increment `turns` at the end of every player turn
 
 ---
 
-### `session/world_state.md`
+### `session/world_state.json`
 
 The global state of Aethermoor. Update when Void Corruption changes, Shards are collected, or Realm conditions change.
 
 **Format:**
-```markdown
-# World State
-
-## Void Corruption
-**Current Corruption:** [0-100]%
-**Corruption Rate:** [X]% per turn (base: 1.0, modified by difficulty and events)
-**Status:** [Stable | Creeping | Critical | Catastrophic]
-
-> Corruption Thresholds:
-> - 0-25%: Stable — the Void is present but contained
-> - 26-50%: Creeping — Realm edges are dissolving; NPCs grow fearful
-> - 51-75%: Critical — Realm areas begin disappearing; some NPCs lost
-> - 76-99%: Catastrophic — Multiple Realms partially consumed; time is running out
-> - 100%: GAME OVER — Aethermoor ceases to exist
-
-## Realm Status
-| Realm | Status | Notes |
-|-------|--------|-------|
-| Emberveil | [Intact/Damaged/Critical/Lost] | [brief note] |
-| Thornwood | [Intact/Damaged/Critical/Lost] | [brief note] |
-| Crystalmere | [Intact/Damaged/Critical/Lost] | [brief note] |
-| Ashen Wastes | Damaged | 60% consumed at game start |
-| Skyreach | [Intact/Damaged/Critical/Lost] | [brief note] |
-
-## Shards Status
-| Shard | Location | Status |
-|-------|----------|--------|
-| Emberveil Shard | Ironmaw Volcano deep chamber | [Not Found/Found/Collected] |
-| Thornwood Shard | Heartroot, Thornwood center | [Not Found/Found/Collected] |
-| Crystalmere Shard | Crystal Sea deepest trench | [Not Found/Found/Collected] |
-| Ashen Shard | Obsidian Citadel Shard Chamber | [Not Found/Found/Collected] |
-| Skyreach Shard | With Zephyra Windfall | [Not Found/Found/Collected] |
-
-## Malachar's Awareness
-**Level:** [Dormant | Watching | Active | Pursuing]
-
-> Awareness increases when:
-> - Each Shard is collected (+1 tier)
-> - Player reaches the Ashen Wastes (+1 tier)
-> - Player attempts to contact Seraphel about the reforging (+1 tier)
->
-> At "Active": Malachar begins sending agents to obstruct the player
-> At "Pursuing": Malachar personally intervenes with vision warnings and traps
-
-## Known Rift Gate Locations
-[List of Realms the player has visited and can Rift to directly]
+```json
+{
+  "void_corruption": {
+    "current": 0.0,
+    "rate": 1.0,
+    "status": "Stable",
+    "_thresholds": {
+      "hidden": true,
+      "values": [
+        {"pct": 25, "label": "Stable"},
+        {"pct": 50, "label": "Creeping"},
+        {"pct": 75, "label": "Critical"},
+        {"pct": 100, "label": "Catastrophic — GAME OVER"}
+      ]
+    }
+  },
+  "realm_status": [
+    {"name": "Emberveil", "status": "Intact", "notes": ""},
+    {"name": "Thornwood", "status": "Intact", "notes": ""},
+    {"name": "Crystalmere", "status": "Intact", "notes": ""},
+    {"name": "Ashen Wastes", "status": "Damaged", "notes": "60% consumed at game start"},
+    {"name": "Skyreach", "status": "Intact", "notes": ""}
+  ],
+  "shards_status": [
+    {"shard": "Emberveil Shard", "location": "Ironmaw Volcano deep chamber", "status": "Not Found"},
+    {"shard": "Thornwood Shard", "location": "Heartroot, Thornwood center", "status": "Not Found"},
+    {"shard": "Crystalmere Shard", "location": "Crystal Sea deepest trench", "status": "Not Found"},
+    {"shard": "Ashen Shard", "location": "Obsidian Citadel Shard Chamber", "status": "Not Found"},
+    {"shard": "Skyreach Shard", "location": "With Zephyra Windfall", "status": "Not Found"}
+  ],
+  "malachar_awareness": {
+    "level": "Dormant",
+    "_triggers": {
+      "hidden": true,
+      "rules": "Awareness increases when: Each Shard is collected (+1 tier), Player reaches the Ashen Wastes (+1 tier), Player attempts to contact Seraphel about the reforging (+1 tier). At Active: Malachar begins sending agents to obstruct the player. At Pursuing: Malachar personally intervenes."
+    }
+  },
+  "known_rift_gates": [],
+  "lore_revelations": []
+}
 ```
 
 **Update rules:**
@@ -119,111 +118,89 @@ The global state of Aethermoor. Update when Void Corruption changes, Shards are 
 - Update Realm Status when the player witnesses significant Void events
 - Update Shard Status when player finds or collects a Shard
 - Update Malachar's Awareness when trigger conditions are met
+- Realm status values: `Intact`, `Damaged`, `Critical`, `Lost`
+- Malachar awareness levels: `Dormant`, `Watching`, `Active`, `Pursuing`
+- Shard status values: `Not Found`, `Found`, `Collected`
 
 ---
 
-### `session/location.md`
+### `session/location.json`
 
 The player's current location. Update every time the player moves.
 
 **Format:**
-```markdown
-# Current Location
-
-**Realm:** [Realm name]
-**Area:** [Area name]
-**Zone:** [Specific zone within area, if relevant]
-
-## Description
-[2-4 sentences describing the current location. Tone: dark, epic, atmospheric. Include sensory details — what the player sees, hears, smells.]
-
-## Exits & Paths
-- **[Direction/Path name]:** leads to [destination] ([difficulty hint if relevant])
-- ...
-
-## Points of Interest
-- **[Object/Feature]:** [brief description, hint at interaction]
-- ...
-
-## NPCs Present
-[List NPCs currently in this zone, or "None"]
-
-## Rift Gate
-[Present / Not Present — if Present: Condition (Stable/Unstable/Dormant)]
-
-## Void Presence
-[None / Faint / Strong / Overwhelming — describes how much Void corruption is visible here]
+```json
+{
+  "realm": "Realm Name",
+  "area": "Area Name",
+  "zone": "Specific Zone",
+  "description": "2-4 sentences describing the current location. Tone: dark, epic, atmospheric. Include sensory details.",
+  "exits": [
+    {"direction": "Direction or Path Name", "destination": "Where it leads"}
+  ],
+  "npcs_present": ["NPC description 1", "NPC description 2"],
+  "rift_gate": "Not Present",
+  "void_presence": "None"
+}
 ```
 
 **Update rules:**
 - Rewrite completely whenever the player moves to a new area
-- Update "NPCs Present" when NPCs arrive or depart
-- Update "Rift Gate" status if the player creates or repairs one
+- Update `npcs_present` when NPCs arrive or depart
+- Update `rift_gate` if the player creates or repairs one
+- Rift gate values: `Not Present`, `Present — Stable`, `Present — Unstable`, `Present — Dormant`
+- Void presence values: `None`, `Faint`, `Strong`, `Overwhelming`
 
 ---
 
-### `session/inventory.md`
+### `session/inventory.json`
 
 Everything the player is carrying. Update when items are gained, used, dropped, or traded.
 
 **Format:**
-```markdown
-# Inventory
-
-**Gold:** [amount]
-**Slots Used:** [X] / [max — from settings]
-
-## Weapons
-| Item | Damage | Notes |
-|------|--------|-------|
-| [name] | [dice] | [any special properties] |
-
-## Armor & Accessories
-| Item | Defense | Notes |
-|------|---------|-------|
-| [name] | [value] | [any special properties] |
-
-## Consumables
-| Item | Effect | Qty |
-|------|--------|-----|
-| [name] | [what it does] | [count] |
-
-## Quest Items
-| Item | Associated Quest | Notes |
-|------|-----------------|-------|
-| [name] | [quest name] | [relevant info] |
-
-## Artifacts
-| Item | Power | Notes |
-|------|-------|-------|
-| [name] | [special ability] | [any limitations] |
+```json
+{
+  "gold": 0,
+  "slots_used": 0,
+  "slots_max": 20,
+  "weapons": [
+    {"name": "Item Name", "damage": "1d6+INT arcane", "notes": "Special properties"}
+  ],
+  "armor": [
+    {"name": "Item Name", "defense": "+1 defense", "notes": "Special properties"}
+  ],
+  "consumables": [
+    {"name": "Item Name", "effect": "What it does", "qty": 1}
+  ],
+  "quest_items": [
+    {"name": "Item Name", "quest": "Associated Quest", "notes": "Relevant info"}
+  ],
+  "artifacts": [
+    {"name": "Item Name", "power": "Special ability", "notes": "Limitations"}
+  ]
+}
 ```
 
 **Update rules:**
 - Add items immediately when acquired
 - Remove items immediately when used, sold, dropped, or consumed
 - Update Gold after every transaction
+- Update `slots_used` to reflect total item count
 
 ---
 
-### `session/log.md`
+### `session/log.json`
 
 A chronological event log. Keep the last 20 entries. Older entries may be trimmed.
 
 **Format:**
-```markdown
-# Session Log
-
-## [Turn X] — [Brief event title]
-[1-3 sentences describing what happened this turn. Include: player action taken, outcome, any notable consequence.]
-
----
-
-## [Turn X-1] — [Brief event title]
-[...]
-
----
-[...continue for last 20 turns...]
+```json
+{
+  "entries": [
+    {"turn": 0, "title": "Brief event title", "text": "1-3 sentences describing what happened."},
+    {"turn": 1, "title": "Next event", "text": "Description of this turn's events."}
+  ]
+}
 ```
 
 **Update rules:**
@@ -233,57 +210,57 @@ A chronological event log. Keep the last 20 entries. Older entries may be trimme
 
 ---
 
-### `session/npcs.md`
+### `session/npcs.json`
 
 The current state of all major NPCs the player has encountered. Update when NPC disposition changes, location changes, or quests are given/completed.
 
 **Format:**
-```markdown
-# NPC Tracker
-
-## [NPC Name]
-- **Location:** [current location]
-- **Disposition:** [hostile | wary | neutral | friendly | devoted]
-- **Status:** [Active/Recruited as Companion/Deceased/Unknown]
-- **Quests Given:** [list quest names, or None]
-- **Quests Completed:** [list, or None]
-- **Notes:** [any relevant state info]
-
----
-[repeat for each encountered NPC]
+```json
+{
+  "npcs": [
+    {
+      "name": "NPC Name",
+      "location": "Current location",
+      "disposition": "Neutral",
+      "status": "Active",
+      "quests_given": "None",
+      "quests_completed": "None",
+      "notes": "Relevant state info"
+    }
+  ]
+}
 ```
 
 **Update rules:**
 - Add an NPC entry when the player first encounters them
-- Update disposition whenever it changes
+- Update disposition whenever it changes (values: `Hostile`, `Wary`, `Neutral`, `Friendly`, `Devoted`)
 - Update location if the NPC moves
-- Move NPC to "Recruited as Companion" status and update companions.md when they join
+- Move NPC to `Recruited as Companion` status and update companions.json when they join
 
 ---
 
-### `session/companions.md`
+### `session/companions.json`
 
 The player's active companions. Update when companions join, leave, level up, or take damage.
 
 **Format:**
-```markdown
-# Active Companions
-
-**Slots Used:** [X] / 3
-
----
-
-## [Companion Name]
-- **Race/Class:** [race and role]
-- **HP:** [current] / [max]
-- **MP:** [current] / [max]
-- **Special Ability:** [name] — [description + cooldown status]
-- **Status:** [Active/Injured/Incapacitated]
-- **Disposition toward player:** [friendly | devoted]
-- **Notes:** [any relevant info, e.g., current cooldown state]
-
----
-[repeat for each companion, up to 3]
+```json
+{
+  "slots_used": 0,
+  "slots_max": 3,
+  "companions": [
+    {
+      "name": "Companion Name",
+      "race_class": "Race and role",
+      "hp": {"current": 50, "max": 50},
+      "mp": {"current": 20, "max": 20},
+      "ability": "Ability Name — description + cooldown status",
+      "status": "Active",
+      "disposition": "Friendly",
+      "notes": "Relevant info"
+    }
+  ]
+}
 ```
 
 **Update rules:**
@@ -291,43 +268,43 @@ The player's active companions. Update when companions join, leave, level up, or
 - Update HP/MP after every combat
 - Track special ability cooldowns
 - Remove entry if companion leaves or is lost
-- Write "No active companions" if party is empty
+- Keep `companions` as an empty array if party is empty
+- Status values: `Active`, `Injured`, `Incapacitated`
 
 ---
 
-### `session/quests.md`
+### `session/quests.json`
 
 All quests: active and completed. Update when quests are received, progressed, or completed.
 
 **Format:**
-```markdown
-# Quest Log
-
-## Active Quests
-
-### [Quest Name]
-- **Given by:** [NPC name]
-- **Realm:** [where the quest takes place]
-- **Objective:** [what needs to be done]
-- **Progress:** [current status, steps completed]
-- **Reward:** [what the player will receive]
-
----
-
-## Completed Quests
-
-### [Quest Name] ✓
-- **Completed:** Turn [X]
-- **Outcome:** [brief description of how it was resolved]
-- **Reward received:** [what was given]
-
----
+```json
+{
+  "active": [
+    {
+      "title": "Quest Name",
+      "given_by": "NPC Name",
+      "realm": "Where the quest takes place",
+      "objective": "What needs to be done",
+      "progress": "Current status",
+      "reward": "What the player will receive"
+    }
+  ],
+  "completed": [
+    {
+      "title": "Quest Name",
+      "completed_turn": "Turn X",
+      "outcome": "Brief description of resolution",
+      "reward_received": "What was given"
+    }
+  ]
+}
 ```
 
 **Update rules:**
 - Add quest as soon as it is given by an NPC
-- Update Progress whenever a quest step is completed
-- Move quest to Completed section and add outcome when finished
+- Update `progress` whenever a quest step is completed
+- Move quest to `completed` array and add outcome when finished
 - Note if a quest was failed or abandoned
 
 ---
@@ -336,17 +313,32 @@ All quests: active and completed. Update when quests are received, progressed, o
 
 These files are created during play if relevant conditions are met.
 
-### `session/map_notes.md`
+### `session/malachar_visions.json`
 
-Created when the player begins keeping notes about discovered areas. Contains player-annotated descriptions of explored zones, secret passages, hidden caches, etc.
+Created when the player receives their first vision from Malachar. Records each vision with the turn it occurred and its content.
 
-### `session/malachar_visions.md`
+**Format:**
+```json
+{
+  "visions": [
+    {
+      "id": 1,
+      "turn": 9,
+      "title": "Vision Title",
+      "trigger": "What triggered the vision",
+      "content": "Description of what happened in the vision"
+    }
+  ]
+}
+```
 
-Created when the player receives their first vision from Malachar. Records each vision with the turn it occurred and its content. Useful for tracking Malachar's awareness level and his stated intentions.
+### `session/map_notes.json`
 
-### `session/lore_fragments.md`
+Created when the player begins keeping notes about discovered areas.
 
-Created when the player finds their first lore fragment (books, inscriptions, echoes with information). Records discovered lore for reference.
+### `session/lore_fragments.json`
+
+Created when the player finds their first lore fragment. Records discovered lore for reference.
 
 ---
 
@@ -354,6 +346,7 @@ Created when the player finds their first lore fragment (books, inscriptions, ec
 
 1. **Never delete session files** during active gameplay — only update them.
 2. **Always read before writing** — check current values before updating to avoid overwriting state you don't intend to change.
-3. **Void Corruption is authoritative** in `world_state.md` — if there is ever a discrepancy, trust `world_state.md`.
+3. **Void Corruption is authoritative** in `world_state.json` — if there is ever a discrepancy, trust `world_state.json`.
 4. **Player HP reaching 0** triggers the death protocol in `agent/game.md` — do not simply update HP to 0 and continue.
-5. **Turn counter** in `player.md` drives the Void Corruption increment — keep it accurate.
+5. **Turn counter** in `player.json` drives the Void Corruption increment — keep it accurate.
+6. **Hidden fields** (objects with `"hidden": true`) contain internal game logic and must not be revealed to the player. They are automatically filtered out by the TUI viewer.

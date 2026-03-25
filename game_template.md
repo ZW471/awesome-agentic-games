@@ -165,22 +165,73 @@ Defines all non-player characters in the game:
 
 The **schema and specification** for the `session/` folder. Defines:
 
-- **Required files**: files that must always exist in `session/` (e.g., `log.md`, `player.md`).
+- **Required files**: files that must always exist in `session/` (e.g., `log.json`, `player.json`).
 - **Optional files**: files that may be created during play under certain conditions.
-- **File formats**: the structure and expected contents of each session file.
+- **File formats**: all session files use **JSON** format for reliable parsing by the TUI viewer and agent.
 - **Update rules**: when and how each file should be updated during gameplay.
+- **Hidden fields**: which fields should be marked with `"hidden": true` to prevent the TUI from displaying them to the player (see **Hidden Fields** below).
 
 Typical session files include (but are game-specific):
 
 | File | Purpose |
 |------|---------|
-| `log.md` | Chronological record of events and interactions in the current session |
-| `player.md` | Player character state: stats, status effects, health, etc. |
-| `inventory.md` | Items the player is carrying |
-| `location.md` | Current location description and available exits/interactions |
-| `npcs.md` | NPCs currently present near the player and their states |
+| `log.json` | Chronological record of events and interactions in the current session |
+| `player.json` | Player character state: stats, status effects, health, etc. |
+| `inventory.json` | Items the player is carrying |
+| `location.json` | Current location description and available exits/interactions |
+| `npcs.json` | NPCs currently present near the player and their states |
 
 The exact files are defined per game in `sessions.md` — the above are examples, not requirements.
+
+### Player-Facing Information Principle
+
+**The player-facing interface (TUI, session files) must never reveal anything the player has not yet discovered through gameplay.** The UI is part of the game world — it should reflect only what the player character knows at any given moment.
+
+This principle applies broadly:
+
+- **Locations/regions**: Only show areas the player has discovered. Undiscovered areas and their unlock requirements must be stored in hidden fields. When the player learns about a new area (an NPC mentions it, they find a map, etc.), move it from the hidden registry to the visible list — but never expose the unlock condition in the visible data. The player should learn how to access areas through gameplay, not from the UI.
+- **NPCs**: Only add NPCs to player-visible tracking after the player has encountered or heard about them.
+- **Items and collectibles**: Don't show total counts, checklists, or structures that reveal undiscovered content.
+- **Progression systems**: Don't reveal layer structures, total milestone counts, or gating logic.
+- **Story outcomes**: Don't show ending trajectories, branching paths, or consequence tracking.
+
+This means session data often needs a **two-part structure**: a visible portion (what the player sees) and a hidden portion (what the agent uses internally). The hidden portion uses the `"hidden": true` convention described below.
+
+### Hidden Fields Convention
+
+Some session data is tracked by the agent for internal game logic but **must not be revealed to the player** through the TUI. Examples include ending trajectories, undiscovered content structures, internal AI scoring, and knowledge gate details.
+
+To mark data as hidden, add `"hidden": true` to any JSON object. The TUI viewer **must skip** any object (at any nesting level) that contains this key-value pair.
+
+```json
+{
+  "public_data": {
+    "name": "Player One",
+    "hp": 100
+  },
+  "ending_trajectory": {
+    "hidden": true,
+    "current": "Neutral",
+    "confidence": "Low"
+  }
+}
+```
+
+In this example, the TUI displays `public_data` but ignores `ending_trajectory` entirely.
+
+**When to use `hidden: true`:**
+- Ending trajectory or story outcome tracking
+- Undiscovered locations, regions, or areas the player hasn't found yet — including their existence and unlock requirements
+- Undiscovered content structures (e.g., full lists of collectibles the player hasn't found yet, including total counts and layer assignments that would spoil progression)
+- Internal NPC disposition scores that differ from what the player perceives
+- Agent-only metadata (e.g., information poisoning flags, false fact tracking)
+- Any data whose mere existence or structure would spoil the player's experience
+
+**Guidelines for game creators:**
+- The `game/sessions.md` schema should document which fields are hidden and why.
+- The `agent/game.md` file should instruct the agent to maintain hidden fields correctly and to promote data from hidden to visible only when the player discovers it through gameplay.
+- Hidden objects can contain any valid JSON — the TUI ignores the entire subtree.
+- When promoting hidden data to visible (e.g., a newly discovered district), strip any agent-internal fields (like `unlock` conditions) before adding to the visible portion.
 
 ---
 
@@ -281,13 +332,13 @@ Contains Python scripts that the agent can invoke to support gameplay. This fold
 
 ## `session/` Folder — Live Game State
 
-The runtime state of the current game. This folder:
+The runtime state of the current game. All files in this folder use **JSON format** (`.json` extension). This folder:
 
 - Is **created** during `NEW GAME` (via the procedure in `game/init.md`).
 - Is **overwritten** during `LOAD GAME` (from a save).
 - Is **read in full** during `RESUME` (to restore state in a new agent conversation).
 - Is **copied** during `SAVE GAME` (into `saves/<save_name>/`).
-- Contains everything the player can see or that affects gameplay during a session.
+- Contains everything the player can see or that affects gameplay during a session, plus hidden agent-only data marked with `"hidden": true`.
 - Its structure is defined by `game/sessions.md`.
 
 The agent reads and writes to this folder during gameplay. It is the single source of truth for current game state.
@@ -351,11 +402,14 @@ Write the README as if it's the back cover of a game box — evocative but conci
 | Convention | Rule |
 |-----------|------|
 | **UPPER CASE `.md`** | Root-level entry points invoked by the player |
-| **lowercase `.md`** | All other files (game definition, agent instructions, session state) |
+| **lowercase `.md`** | Game definition and agent instruction files |
+| **`.json` for session state** | All files in `session/` and `saves/` use JSON format for reliable TUI parsing |
 | **Player invokes** | Only `NEW GAME.md`, `LOAD GAME.md`, `SAVE GAME.md`, `RESUME.md` (via `@`) |
 | **Agent invokes** | `game/init.md` and any internal procedures — never directly by player |
 | **Read-only during play** | `game/`, `agent/`, `settings/default.json` |
 | **Read-write during play** | `session/`, `settings/custom.json` |
+| **Player-facing info hiding** | The UI must never reveal anything the player hasn't discovered through gameplay — undiscovered locations, unlock requirements, total counts, progression structures, and story outcomes must be hidden |
+| **Hidden fields** | JSON objects with `"hidden": true` are tracked by the agent but not displayed by the TUI |
 | **Tools** | Optional; usage defined in `agent/` files; stored in `tools/`; run with `.venv/bin/python` |
 | **Python environment** | Created with `uv venv`; dependencies installed with `uv pip install`; all scripts use `.venv/bin/python` |
 | **TUI viewer** | Optional; created if player requests it; follows `tui_template.md`; requires `textual` in venv |

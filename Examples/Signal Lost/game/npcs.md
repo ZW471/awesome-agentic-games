@@ -499,7 +499,7 @@ Each minor NPC carries at most **1 rumor** OR **1 fact** and has a simple person
 
 ## NPC Location Tracking
 
-The agent must track each major NPC's current location and status in `session/npcs.md`. Major NPCs can move under specific conditions:
+The agent must track each major NPC's current location and status in `session/npcs.json`. Major NPCs can move under specific conditions:
 
 - **Mira** stays at the Lucky Bowl unless driven out by a NEXUS raid. If displaced, she relocates to a Listener safehouse (location revealed at Friendly trust).
 - **Ghost** stays at the Void unless driven out. If displaced, Ghost goes completely dark — the player loses contact until Ghost reaches out (1-2 in-game scenes later) from a new, undisclosed location.

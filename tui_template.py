@@ -27,7 +27,6 @@ import fcntl
 import json
 import os
 import pty
-import re
 import struct
 import subprocess
 import sys
@@ -634,11 +633,36 @@ class PtyTerminal(Static, can_focus=True):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# HIDDEN FIELD FILTERING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def filter_hidden(data):
+    """Recursively remove any dict containing 'hidden': True from the data tree.
+
+    Session JSON files may contain objects marked with "hidden": true. These
+    are agent-internal data (e.g., ending trajectories, undiscovered content
+    structures, knowledge gate details) that must not be displayed to the
+    player in the TUI.
+
+    This function walks the data tree and removes any dict that has
+    hidden=True, as well as any list items or dict values that are hidden.
+    """
+    if isinstance(data, dict):
+        if data.get("hidden") is True:
+            return None
+        return {k: v for k, v in ((k, filter_hidden(v)) for k, v in data.items()) if v is not None}
+    if isinstance(data, list):
+        return [item for item in (filter_hidden(i) for i in data) if item is not None]
+    return data
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # SESSION PARSER
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# The SessionParser reads markdown and JSON files from the game's session/,
-# settings/, and game/ directories, extracting structured data via regex.
+# The SessionParser reads JSON files from the game's session/ and settings/
+# directories. Since all session files use JSON format, parsing is simply
+# json.load() — no regex needed.
 #
 # CUSTOMIZATION: Replace or add parse_*() methods to match your game's session
 # file schema. Each method should return a dict (or list[dict]) and handle
@@ -648,8 +672,10 @@ class PtyTerminal(Static, can_focus=True):
 class SessionParser:
     """Parses all session files from an agentic game directory.
 
-    Subclass or modify this to match your game's specific file layout and
-    markdown patterns. Each parse_*() method corresponds to one session file.
+    All session files use JSON format (.json). Each parse_*() method loads
+    the corresponding file and returns its contents as a dict. The parse_all()
+    method applies filter_hidden() to strip agent-internal data before
+    returning the combined result to the TUI.
     """
 
     def __init__(self, game_dir: str):
@@ -659,145 +685,73 @@ class SessionParser:
         self.game_data_dir = self.game_dir / "game"
         self.tools_dir = self.game_dir / "tools"
 
-    def _read(self, path: Path) -> str:
-        """Read a file, returning empty string if missing or unreadable."""
+    def _read_json(self, path: Path) -> dict:
+        """Read a JSON file, returning empty dict if missing or invalid."""
         try:
-            return path.read_text(encoding="utf-8")
-        except (FileNotFoundError, PermissionError):
-            return ""
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+            return {}
 
     # ── Player / Character ────────────────────────────────────────────────
-    # CUSTOMIZE: Parse your game's player/character session file.
-    # Common patterns to extract:
-    #   **Key:** Value         -> key-value pairs
-    #   | col1 | col2 |       -> table rows
-    #   - [x] Item / - [ ]    -> checklists
-    #   ## Section             -> section splitting
+    # CUSTOMIZE: The JSON structure depends on your game's player schema.
+    # Example player.json:
+    #   {"name": "Hero", "class": "Warrior", "stats": {"HP": {"base": 100, "current": 73}},
+    #    "turns": 5}
     def parse_player(self) -> dict:
-        text = self._read(self.session_dir / "player.md")
-        if not text:
-            return {}
-        p = {}
-        # Example: extract name from "# Player: <name>"
-        m = re.search(r"# Player:\s*(.+)", text)
-        p["name"] = m.group(1).strip() if m else "Unknown"
-        # Example: extract class from "**Class:** <class>"
-        m = re.search(r"\*\*Class:\*\*\s*(.+)", text)
-        p["class"] = m.group(1).strip() if m else "Unknown"
-        # Example: extract stats from a markdown table
-        # | Stat | Base | Current |
-        # | HP   | 100  | 73      |
-        p["stats"] = {}
-        for m in re.finditer(r"\|\s*(\w+)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|", text):
-            p["stats"][m.group(1)] = {"base": int(m.group(2)), "current": int(m.group(3))}
-        # Example: extract turn counter
-        m = re.search(r"\*\*Turns Elapsed:\*\*\s*(\d+)", text)
-        p["turns"] = int(m.group(1)) if m else 0
-        return p
+        return self._read_json(self.session_dir / "player.json")
 
     # ── World State ───────────────────────────────────────────────────────
-    # CUSTOMIZE: Parse global state, threat meters, region statuses, etc.
+    # CUSTOMIZE: The JSON structure depends on your game's world state schema.
+    # Example world_state.json:
+    #   {"threat_pct": 31, "regions": [...]}
     def parse_world_state(self) -> dict:
-        text = self._read(self.session_dir / "world_state.md")
-        if not text:
-            return {}
-        w = {}
-        # Example: threat percentage
-        m = re.search(r"\*\*(?:Threat|Corruption).*?:\*\*\s*(\d+)%", text)
-        w["threat_pct"] = int(m.group(1)) if m else 0
-        return w
+        return self._read_json(self.session_dir / "world_state.json")
 
     # ── Location ──────────────────────────────────────────────────────────
-    # CUSTOMIZE: Parse current location, exits, points of interest.
+    # CUSTOMIZE: Adapt to your game's location JSON schema.
     def parse_location(self) -> dict:
-        text = self._read(self.session_dir / "location.md")
-        if not text:
-            return {}
-        loc = {}
-        m = re.search(r"\*\*(?:Location|Area):\*\*\s*(.+)", text)
-        loc["name"] = m.group(1).strip() if m else "Unknown"
-        # Extract exits from a bulleted list under "## Exits"
-        loc["exits"] = []
-        in_exits = False
-        for line in text.split("\n"):
-            if "## Exits" in line:
-                in_exits = True
-                continue
-            if in_exits and line.startswith("## "):
-                break
-            if in_exits and line.startswith("- "):
-                loc["exits"].append(line.lstrip("- ").strip())
-        return loc
+        return self._read_json(self.session_dir / "location.json")
 
     # ── Inventory ─────────────────────────────────────────────────────────
-    # CUSTOMIZE: Parse items, currency, slot usage.
+    # CUSTOMIZE: Adapt to your game's inventory JSON schema.
     def parse_inventory(self) -> dict:
-        text = self._read(self.session_dir / "inventory.md")
-        if not text:
-            return {}
-        inv = {}
-        m = re.search(r"\*\*(?:Gold|Currency):\*\*\s*(\d+)", text)
-        inv["currency"] = int(m.group(1)) if m else 0
-        return inv
+        return self._read_json(self.session_dir / "inventory.json")
 
     # ── Companions ────────────────────────────────────────────────────────
-    # CUSTOMIZE: Parse party members, their stats, disposition.
+    # CUSTOMIZE: Adapt to your game's companion JSON schema.
     def parse_companions(self) -> dict:
-        text = self._read(self.session_dir / "companions.md")
-        if not text:
-            return {}
-        return {"companions": []}
+        return self._read_json(self.session_dir / "companions.json")
 
     # ── NPCs ──────────────────────────────────────────────────────────────
-    # CUSTOMIZE: Parse encountered NPCs with disposition, location, quest ties.
-    def parse_npcs(self) -> list[dict]:
-        text = self._read(self.session_dir / "npcs.md")
-        if not text:
-            return []
-        return []
+    # CUSTOMIZE: Adapt to your game's NPC JSON schema.
+    def parse_npcs(self) -> dict:
+        return self._read_json(self.session_dir / "npcs.json")
 
     # ── Quests ────────────────────────────────────────────────────────────
-    # CUSTOMIZE: Parse active and completed quests.
+    # CUSTOMIZE: Adapt to your game's quest JSON schema.
     def parse_quests(self) -> dict:
-        text = self._read(self.session_dir / "quests.md")
-        if not text:
-            return {"active": [], "completed": []}
-        return {"active": [], "completed": []}
+        return self._read_json(self.session_dir / "quests.json")
 
     # ── Log ───────────────────────────────────────────────────────────────
-    # CUSTOMIZE: Parse session log entries (turn-by-turn events).
-    def parse_log(self) -> list[dict]:
-        text = self._read(self.session_dir / "log.md")
-        if not text:
-            return []
-        entries = []
-        blocks = re.split(r"\n---\n", text)
-        for block in blocks:
-            m = re.search(r"## \[Turn (\d+)\] — (.+)\n(.+)", block, re.DOTALL)
-            if m:
-                entries.append({
-                    "turn": int(m.group(1)),
-                    "title": m.group(2).strip(),
-                    "text": m.group(3).strip(),
-                })
-        return entries
+    # CUSTOMIZE: Adapt to your game's log JSON schema.
+    # Example log.json:
+    #   {"entries": [{"turn": 1, "title": "Begin", "text": "...", "tag": "system"}]}
+    def parse_log(self) -> dict:
+        return self._read_json(self.session_dir / "log.json")
 
     # ── Settings ──────────────────────────────────────────────────────────
     def parse_settings(self) -> dict:
-        text = self._read(self.settings_dir / "custom.json")
-        if not text:
-            text = self._read(self.settings_dir / "default.json")
-        if not text:
-            return {}
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            return {}
+        data = self._read_json(self.settings_dir / "custom.json")
+        if not data:
+            data = self._read_json(self.settings_dir / "default.json")
+        return data
 
     # ── Full parse ────────────────────────────────────────────────────────
     # CUSTOMIZE: Update this to call all your parse methods.
+    # filter_hidden() is applied to strip any objects with "hidden": true.
     def parse_all(self) -> dict:
-        return {
+        raw = {
             "player": self.parse_player(),
             "world": self.parse_world_state(),
             "location": self.parse_location(),
@@ -808,6 +762,7 @@ class SessionParser:
             "log": self.parse_log(),
             "settings": self.parse_settings(),
         }
+        return filter_hidden(raw)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1113,7 +1068,8 @@ class LogPanel(Static):
         self.data = data
 
     def render(self) -> Group:
-        entries = self.data.get("log", [])
+        log_data = self.data.get("log", {})
+        entries = log_data.get("entries", []) if isinstance(log_data, dict) else log_data
         if not entries:
             return Group(Text("No log entries found.", style="dim"))
 

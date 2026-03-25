@@ -933,414 +933,327 @@ class PtyTerminal(Static, can_focus=True):
 # SESSION PARSER
 # =============================================================================
 
+def filter_hidden(data):
+    """Recursively remove any dict containing 'hidden': True from the data tree."""
+    if isinstance(data, dict):
+        if data.get("hidden") is True:
+            return None
+        return {k: v for k, v in ((k, filter_hidden(v)) for k, v in data.items()) if v is not None}
+    if isinstance(data, list):
+        return [item for item in (filter_hidden(i) for i in data) if item is not None]
+    return data
+
+
 class SessionParser:
-    """Parses all session/*.md files and settings/custom.json into dicts."""
+    """Parses all session/*.json files and settings/custom.json into dicts."""
 
     def __init__(self, game_dir):
         self.game_dir = Path(game_dir)
         self.session_dir = self.game_dir / "session"
         self.settings_dir = self.game_dir / "settings"
 
-    def _read_file(self, filename: str) -> str:
-        path = self.session_dir / filename
+    def _read_json(self, path: Path) -> dict:
         try:
-            return path.read_text(encoding="utf-8")
-        except (FileNotFoundError, OSError):
-            return ""
-
-    def _extract_field(self, text: str, field: str) -> str:
-        pattern = rf"\*\*[^*]*{re.escape(field)}[^*]*:\*\*\s*(.+)"
-        m = re.search(pattern, text)
-        return m.group(1).strip() if m else ""
-
-    def _extract_section(self, text: str, heading: str) -> str:
-        pattern = rf"##\s+[^\n]*{re.escape(heading)}[^\n]*\n(.*?)(?=\n##\s|\Z)"
-        m = re.search(pattern, text, re.DOTALL)
-        return m.group(1).strip() if m else ""
-
-    def _extract_bullet_items(self, section_text: str) -> list[str]:
-        items = []
-        for line in section_text.split("\n"):
-            line = line.strip()
-            if line.startswith("- "):
-                items.append(line[2:].strip())
-            elif line.startswith("* "):
-                items.append(line[2:].strip())
-        return items
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+            return {}
 
     def parse_settings(self) -> dict:
-        path = self.settings_dir / "custom.json"
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return {}
+        return self._read_json(self.settings_dir / "custom.json")
 
     def parse_player(self) -> dict:
-        text = self._read_file("player.md")
-        if not text:
+        raw = self._read_json(self.session_dir / "player.json")
+        if not raw:
             return {}
-        # Parse integrity "X / Y"
-        integrity_str = self._extract_field(text, "Integrity")
-        integrity_current, integrity_max = 0, 0
-        if "/" in integrity_str:
-            parts = integrity_str.split("/")
-            try:
-                integrity_current = int(parts[0].strip())
-                integrity_max = int(parts[1].strip())
-            except ValueError:
-                pass
 
-        credits_str = self._extract_field(text, "Credits")
-        try:
-            credits_val = int(re.sub(r"[^\d]", "", credits_str)) if credits_str else 0
-        except ValueError:
-            credits_val = 0
+        integrity = raw.get("integrity", {})
+        disguise = raw.get("current_disguise") or "None"
 
-        turn_str = self._extract_field(text, "Turn")
-        try:
-            turn_val = int(re.sub(r"[^\d]", "", turn_str)) if turn_str else 0
-        except ValueError:
-            turn_val = 0
-
-        status_section = self._extract_section(text, "Status Effects")
-        status_effects = self._extract_bullet_items(status_section)
+        status_effects = []
+        for eff in raw.get("status_effects", []):
+            if isinstance(eff, dict):
+                name = eff.get("name", "")
+                intensity = eff.get("intensity", "")
+                status_effects.append(f"{name} — {intensity}" if intensity else name)
+            else:
+                status_effects.append(str(eff))
 
         return {
-            "name": self._extract_field(text, "Name"),
-            "alias": self._extract_field(text, "Alias"),
-            "background": self._extract_field(text, "Background"),
-            "integrity_current": integrity_current,
-            "integrity_max": integrity_max,
-            "credits": credits_val,
-            "neural_implant": self._extract_field(text, "Neural Implant"),
-            "disguise": self._extract_field(text, "Current Disguise"),
-            "turn": turn_val,
-            "time": self._extract_field(text, "Time"),
+            "name": raw.get("name", ""),
+            "alias": raw.get("alias", ""),
+            "background": raw.get("background", ""),
+            "integrity_current": integrity.get("current", 0) if isinstance(integrity, dict) else 0,
+            "integrity_max": integrity.get("max", 3) if isinstance(integrity, dict) else 3,
+            "credits": raw.get("credits", 0),
+            "neural_implant": raw.get("neural_implant", "Dormant"),
+            "disguise": disguise,
+            "turn": raw.get("turn", 0),
+            "time": raw.get("time", ""),
             "status_effects": status_effects,
         }
 
     def parse_knowledge(self) -> dict:
-        text = self._read_file("knowledge.md")
-        if not text:
+        raw = self._read_json(self.session_dir / "knowledge.json")
+        if not raw:
             return {"facts": [], "rumors": [], "evidence": [], "theories": [], "connections": []}
 
+        def _format_entry(entry, prefix=""):
+            if isinstance(entry, str):
+                return entry
+            entry_id = entry.get("id", "")
+            desc = entry.get("description", entry.get("statement", ""))
+            source = entry.get("source", entry.get("found", ""))
+            turn = entry.get("turn", "")
+            status = entry.get("status", "")
+            based_on = entry.get("based_on", [])
+
+            parts = []
+            if entry_id:
+                parts.append(f"[{entry_id}]")
+            parts.append(desc)
+            if source:
+                parts.append(f"(Source: {source}, Turn: {turn})" if turn else f"(Source: {source})")
+            elif based_on:
+                parts.append(f"(Based on: {', '.join(based_on)}, Turn: {turn}, Status: {status})")
+            elif turn:
+                parts.append(f"(Turn: {turn})")
+
+            text = " ".join(parts)
+            if prefix:
+                text = f"{prefix} {text}"
+            return text
+
         result = {}
-        for section_key, heading_variants in [
-            ("facts", ["Facts", "Facts / \u4e8b\u5b9e"]),
-            ("rumors", ["Rumors", "Rumors / \u4f20\u95fb"]),
-            ("evidence", ["Evidence", "Evidence / \u8bc1\u636e"]),
-            ("theories", ["Theories", "Theories / \u63a8\u8bba"]),
-            ("connections", ["Connections", "Connections / \u5173\u8054"]),
-        ]:
-            items = []
-            for heading in heading_variants:
-                section = self._extract_section(text, heading)
-                if section:
-                    items = self._extract_bullet_items(section)
-                    break
-            result[section_key] = items
+
+        # Facts
+        result["facts"] = [_format_entry(e, "\u2713") for e in raw.get("facts", [])]
+
+        # Rumors
+        rumors = []
+        for e in raw.get("rumors", []):
+            if isinstance(e, str):
+                rumors.append(e)
+            else:
+                status = e.get("status", "unconfirmed")
+                if status == "confirmed":
+                    prefix = "\u2713"
+                elif status == "disproven":
+                    prefix = "\u2717"
+                else:
+                    prefix = "?"
+                rumors.append(_format_entry(e, prefix))
+        result["rumors"] = rumors
+
+        # Evidence
+        result["evidence"] = [_format_entry(e) for e in raw.get("evidence", [])]
+
+        # Theories
+        result["theories"] = [_format_entry(e) for e in raw.get("theories", [])]
+
+        # Connections
+        connections = []
+        for e in raw.get("connections", []):
+            if isinstance(e, str):
+                connections.append(e)
+            else:
+                ids = e.get("ids", [])
+                rel = e.get("relationship", "")
+                if len(ids) >= 2:
+                    connections.append(f"{ids[0]} \u2194 {ids[1]}: {rel}")
+                else:
+                    connections.append(rel)
+        result["connections"] = connections
+
         return result
 
     def parse_traces(self) -> dict:
-        text = self._read_file("traces.md")
-        if not text:
-            return {"total_discovered": 0, "total_max": 16, "layers": []}
+        raw = self._read_json(self.session_dir / "traces.json")
+        if not raw:
+            return {"discovered": []}
 
-        # Total discovered — handles both English and bilingual formats
-        total_match = re.search(r"\*\*[^*]*(?:Traces |Total )Discovered[^*]*:\*\*\s*(\d+)\s*/\s*(\d+)", text)
-        if not total_match:
-            total_match = re.search(r"\*\*[^*]*(?:Traces |Total )Discovered[^*]*\s*(\d+)\s*/\s*(\d+)\*\*", text)
-        total_discovered = int(total_match.group(1)) if total_match else 0
-        total_max = int(total_match.group(2)) if total_match else 16
-
-        # Parse layers — handles "## Layer 1..." and "## 第一层：... / Layer 1: ..."
-        layers = []
-        layer_pattern = r"##\s+[^\n]*Layer\s+(\d+)[^\n]*\n(.*?)(?=\n##\s|\Z)"
-        for lm in re.finditer(layer_pattern, text, re.DOTALL):
-            layer_num = int(lm.group(1))
-            layer_body = lm.group(2)
-            traces = []
-            discovered_count = 0
-            total_in_layer = 0
-            for line in layer_body.split("\n"):
-                line = line.strip()
-                if not line.startswith("- "):
-                    continue
-                entry = line[2:].strip()
-                total_in_layer += 1
-                is_discovered = entry.startswith("\u25c6")
-                if is_discovered:
-                    discovered_count += 1
-                # Remove marker
-                entry_text = entry.lstrip("\u25c6\u25cb").strip()
-                traces.append({
-                    "discovered": is_discovered,
-                    "text": entry_text,
+        # Only return discovered traces — do NOT expose the _gate_system
+        # (total count, layer structure, undiscovered trace IDs) to the TUI.
+        # This prevents spoiling the progression mystery for the player.
+        discovered = []
+        for d in raw.get("discovered", []):
+            if isinstance(d, dict):
+                discovered.append({
+                    "id": d.get("id", ""),
+                    "description": d.get("description", ""),
+                    "turn_discovered": d.get("turn_discovered", None),
                 })
-            layers.append({
-                "layer": layer_num,
-                "discovered": discovered_count,
-                "total": total_in_layer,
-                "traces": traces,
-            })
+            elif isinstance(d, str):
+                discovered.append({"id": d, "description": "", "turn_discovered": None})
 
-        return {
-            "total_discovered": total_discovered,
-            "total_max": total_max,
-            "layers": layers,
-        }
+        return {"discovered": discovered}
 
     def parse_location(self) -> dict:
-        text = self._read_file("location.md")
-        if not text:
+        raw = self._read_json(self.session_dir / "location.json")
+        if not raw:
             return {}
 
-        signal_str = self._extract_field(text, "Signal Strength")
-        signal_match = re.search(r"(\d+)", signal_str)
-        signal_val = int(signal_match.group(1)) if signal_match else 0
+        env = raw.get("environment", {})
 
-        exits_section = self._extract_section(text, "Exits")
-        exits = self._extract_bullet_items(exits_section)
+        # Format exits as strings for the panel
+        exits = []
+        for ex in raw.get("exits", []):
+            if isinstance(ex, dict):
+                direction = ex.get("direction_zh", ex.get("direction", ""))
+                dest = ex.get("destination", "")
+                status = ex.get("status", "")
+                exits.append(f"**{direction}:** {dest}（{status}）" if status else f"**{direction}:** {dest}")
+            else:
+                exits.append(str(ex))
 
-        poi_section = ""
-        for heading in ["Points of Interest", "Points of Interest"]:
-            poi_section = self._extract_section(text, heading)
-            if poi_section:
-                break
-        pois = self._extract_bullet_items(poi_section)
+        # Format POIs as strings
+        pois = []
+        for p in raw.get("points_of_interest", []):
+            if isinstance(p, dict):
+                name = p.get("name", "")
+                direction = p.get("direction", "")
+                desc = p.get("description", "")
+                pois.append(f"**{name}（{direction}）:** {desc}" if direction else f"**{name}:** {desc}")
+            else:
+                pois.append(str(p))
 
-        npcs_section = self._extract_section(text, "NPCs Present")
-        npcs = self._extract_bullet_items(npcs_section)
+        # Format NPCs as strings
+        npcs = []
+        for n in raw.get("npcs_present", []):
+            if isinstance(n, dict):
+                name = n.get("name_zh", n.get("name", ""))
+                ename = n.get("name", "")
+                activity = n.get("activity", "")
+                display = f"**{name}（{ename}）:** {activity}" if ename and ename != name else f"**{name}:** {activity}"
+                npcs.append(display)
+            else:
+                npcs.append(str(n))
 
-        desc_section = self._extract_section(text, "Description")
+        district = raw.get("district", "")
+        district_zh = raw.get("district_zh", "")
+        area = raw.get("area", "")
+        area_zh = raw.get("area_zh", "")
 
         return {
-            "district": self._extract_field(text, "District"),
-            "area": self._extract_field(text, "Area"),
-            "signal_strength": signal_val,
-            "danger_level": self._extract_field(text, "Danger Level"),
-            "nexus_patrol": self._extract_field(text, "NEXUS Patrol"),
+            "district": f"{district_zh}（{district}）" if district_zh else district,
+            "area": f"{area_zh}（{area}）" if area_zh else area,
+            "signal_strength": env.get("signal_strength", 0),
+            "danger_level": env.get("danger_level", "Safe"),
+            "nexus_patrol": env.get("nexus_patrol", "None"),
             "exits": exits,
             "pois": pois,
             "npcs": npcs,
-            "description": desc_section,
+            "description": raw.get("description", ""),
         }
 
     def parse_inventory(self) -> dict:
-        text = self._read_file("inventory.md")
-        if not text:
+        raw = self._read_json(self.session_dir / "inventory.json")
+        if not raw:
             return {"credits": 0, "slots_used": 0, "slots_max": 6, "items": []}
 
-        credits_str = self._extract_field(text, "Credits")
-        try:
-            credits_val = int(re.sub(r"[^\d]", "", credits_str)) if credits_str else 0
-        except ValueError:
-            credits_val = 0
-
-        slots_str = self._extract_field(text, "Slots Used") or self._extract_field(text, "Slots")
-        slots_used, slots_max = 0, 6
-        if "/" in slots_str:
-            parts = slots_str.split("/")
-            try:
-                slots_used = int(parts[0].strip())
-                slots_max = int(parts[1].strip())
-            except ValueError:
-                pass
-
-        # Parse table rows
         items = []
-        in_table = False
-        for line in text.split("\n"):
-            line = line.strip()
-            if line.startswith("|") and ("Slot" in line or "栏位" in line) and ("Item" in line or "物品" in line):
-                in_table = True
-                continue
-            if in_table and line.startswith("|--"):
-                continue
-            if in_table and line.startswith("|"):
-                cols = [c.strip() for c in line.split("|")[1:-1]]
-                if len(cols) >= 4:
-                    slot_num = cols[0]
-                    item_name = cols[1]
-                    item_type = cols[2]
-                    item_desc = cols[3]
-                    evidence_id = cols[4] if len(cols) > 4 else ""
-                    if item_name and item_name != "-" and item_name.lower() != "empty" and item_name != "\u2014":
-                        items.append({
-                            "slot": slot_num,
-                            "name": item_name,
-                            "type": item_type,
-                            "description": item_desc,
-                            "evidence_id": evidence_id,
-                        })
-            elif in_table and not line.startswith("|"):
-                in_table = False
+        for item in raw.get("items", []):
+            if isinstance(item, dict):
+                items.append({
+                    "slot": item.get("slot", 0),
+                    "name": item.get("name", ""),
+                    "type": item.get("type", ""),
+                    "description": item.get("description", ""),
+                    "evidence_id": item.get("evidence_id", "") or "",
+                })
 
         return {
-            "credits": credits_val,
-            "slots_used": slots_used,
-            "slots_max": slots_max,
+            "credits": raw.get("credits", 0),
+            "slots_used": raw.get("slots_used", 0),
+            "slots_max": raw.get("slots_max", 6),
             "items": items,
         }
 
     def parse_npcs(self) -> list[dict]:
-        text = self._read_file("npcs.md")
-        if not text:
+        raw = self._read_json(self.session_dir / "npcs.json")
+        if not raw:
             return []
 
         npcs = []
-        # Split by NPC sections (## headings)
-        npc_blocks = re.split(r"\n##\s+", text)
-        for block in npc_blocks:
-            block = block.strip()
-            if not block or block.startswith("#"):
+        for npc in raw.get("npcs", []):
+            if not isinstance(npc, dict):
                 continue
-            # First line is name
-            lines = block.split("\n")
-            name = lines[0].strip().rstrip("#").strip()
+            name = npc.get("name", "")
+            name_zh = npc.get("name_zh", "")
+            display_name = f"{name_zh} / {name}" if name_zh else name
 
-            # Parse fields
-            npc_data = {"name": name}
-            for line in lines[1:]:
-                line = line.strip()
-                if line.startswith("- **"):
-                    fm = re.match(r"-\s+\*\*(.+?):\*\*\s*(.*)", line)
-                    if fm:
-                        raw_key = fm.group(1).strip()
-                        val = fm.group(2).strip()
-                        # Handle bilingual keys like "派系 / Faction" — use the English part
-                        if "/" in raw_key:
-                            parts = [p.strip() for p in raw_key.split("/")]
-                            # Use the last ASCII-dominant part as the canonical key
-                            eng = next((p for p in reversed(parts) if p.isascii()), parts[-1])
-                            key = eng.lower().replace(" ", "_")
-                        else:
-                            key = raw_key.lower().replace(" ", "_")
-                        npc_data[key] = val
-            if "faction" in npc_data or "trust_level" in npc_data:
-                npcs.append(npc_data)
-
-        # Also try table format
-        if not npcs:
-            in_table = False
-            headers = []
-            for line in text.split("\n"):
-                line = line.strip()
-                if not in_table and line.startswith("|") and ("Name" in line or "name" in line or "姓名" in line):
-                    headers = [h.strip().lower().replace(" ", "_") for h in line.split("|")[1:-1]]
-                    in_table = True
-                    continue
-                if in_table and line.startswith("|--"):
-                    continue
-                if in_table and line.startswith("|"):
-                    cols = [c.strip() for c in line.split("|")[1:-1]]
-                    npc_data = {}
-                    for i, h in enumerate(headers):
-                        if i < len(cols):
-                            npc_data[h] = cols[i]
-                    if npc_data.get("name"):
-                        npcs.append(npc_data)
-                elif in_table:
-                    in_table = False
+            npcs.append({
+                "name": display_name,
+                "faction": npc.get("faction", npc.get("faction_zh", "Unknown")),
+                "trust_level": npc.get("trust_level", "neutral"),
+                "location_last_seen": npc.get("location_last_seen", ""),
+                "quest_status": ", ".join(npc.get("quest_status", [])) if isinstance(npc.get("quest_status"), list) else str(npc.get("quest_status", "")),
+                "notes": npc.get("notes", ""),
+            })
 
         return npcs
 
     def parse_world_state(self) -> dict:
-        text = self._read_file("world_state.md")
-        if not text:
+        raw = self._read_json(self.session_dir / "world_state.json")
+        if not raw:
             return {}
 
-        alert_str = self._extract_field(text, "Current Alert")
-        alert_match = re.search(r"(\d+)", alert_str)
-        alert_val = int(alert_match.group(1)) if alert_match else 0
+        nexus = raw.get("nexus_alert", {})
+        decay = raw.get("fragment_decay", {})
+        time_data = raw.get("time", {})
 
-        decay_str = self._extract_field(text, "Current Decay")
-        decay_match = re.search(r"(\d+)", decay_str)
-        decay_val = int(decay_match.group(1)) if decay_match else 0
-
-        alert_status = self._extract_field(text, "Status")
-
-        # District access table
+        # District access
         districts = []
-        in_table = False
-        for line in text.split("\n"):
-            line = line.strip()
-            if not in_table and line.startswith("|") and ("District" in line or "区域" in line):
-                in_table = True
-                continue
-            if in_table and line.startswith("|--"):
-                continue
-            if in_table and line.startswith("|"):
-                cols = [c.strip() for c in line.split("|")[1:-1]]
-                if len(cols) >= 3:
-                    districts.append({
-                        "name": cols[0],
-                        "chinese": cols[1] if len(cols) > 1 else "",
-                        "status": cols[2] if len(cols) > 2 else "",
-                        "notes": cols[3] if len(cols) > 3 else "",
-                    })
-            elif in_table and not line.startswith("|"):
-                in_table = False
+        for d in raw.get("district_access", []):
+            if isinstance(d, dict):
+                districts.append({
+                    "name": d.get("name", ""),
+                    "chinese": d.get("name_zh", ""),
+                    "status": d.get("status", ""),
+                })
 
-        period = self._extract_field(text, "Time of Day")
-        turn_str = self._extract_field(text, "Turn")
-        try:
-            turn_val = int(re.sub(r"[^\d]", "", turn_str)) if turn_str else 0
-        except ValueError:
-            turn_val = 0
+        # Global events
+        events = []
+        for ev in raw.get("global_events", []):
+            if isinstance(ev, str):
+                events.append(ev)
+            elif isinstance(ev, dict):
+                events.append(ev.get("description", str(ev)))
 
-        events_section = self._extract_section(text, "Global Events")
-        events = self._extract_bullet_items(events_section)
-
-        fragment_status = ""
-        # Find Fragment Decay status
-        frag_section = self._extract_section(text, "Fragment Decay")
-        if frag_section:
-            sm = re.search(r"\*\*Status:\*\*\s*(.+)", frag_section)
-            if sm:
-                fragment_status = sm.group(1).strip()
+        period = time_data.get("time_of_day", "") if isinstance(time_data, dict) else ""
+        period_zh = time_data.get("time_of_day_zh", "") if isinstance(time_data, dict) else ""
+        period_display = f"{period_zh}（{period}）" if period_zh else period
 
         return {
-            "nexus_alert": alert_val,
-            "alert_status": alert_status,
-            "fragment_decay": decay_val,
-            "fragment_status": fragment_status,
+            "nexus_alert": nexus.get("current", 0) if isinstance(nexus, dict) else 0,
+            "alert_status": nexus.get("status", "") if isinstance(nexus, dict) else "",
+            "fragment_decay": decay.get("current", 0) if isinstance(decay, dict) else 0,
+            "fragment_status": decay.get("status", "") if isinstance(decay, dict) else "",
             "districts": districts,
-            "period": period,
-            "turn": turn_val,
+            "period": period_display,
+            "turn": time_data.get("turn", 0) if isinstance(time_data, dict) else 0,
             "events": events,
         }
 
     def parse_log(self) -> list[dict]:
-        text = self._read_file("log.md")
-        if not text:
+        raw = self._read_json(self.session_dir / "log.json")
+        if not raw:
             return []
 
         entries = []
-        # Pattern: ## [Turn N] or ## 【回合 N】 -- Title [tag]
-        pattern = r"##\s+(?:\[Turn\s+(\d+)\]|【回合\s*(\d+)】)\s*[\u2014\-]+\s*(.+?)(?:\[(\w+)\])?\s*\n(.*?)(?=\n##\s|\Z)"
-        for m in re.finditer(pattern, text, re.DOTALL):
-            turn = int(m.group(1) or m.group(2))
-            title = m.group(3).strip()
-            tag = m.group(4) if m.group(4) else "system"
-            description = m.group(5).strip()
-            # Also try extracting tag from title if not captured
-            tag_in_title = re.search(r"\[(\w+)\]", title)
-            if tag_in_title:
-                tag = tag_in_title.group(1)
-                title = title[:tag_in_title.start()].strip()
-            entries.append({
-                "turn": turn,
-                "title": title,
-                "tag": tag.lower(),
-                "description": description,
-            })
+        for entry in raw.get("entries", []):
+            if isinstance(entry, dict):
+                entries.append({
+                    "turn": entry.get("turn", 0),
+                    "title": entry.get("title", ""),
+                    "tag": entry.get("tag", "system").lower(),
+                    "description": entry.get("text", entry.get("description", "")),
+                })
 
         return entries
 
     def parse_all(self) -> dict:
-        return {
+        result = {
             "player": self.parse_player(),
             "knowledge": self.parse_knowledge(),
             "traces": self.parse_traces(),
@@ -1350,6 +1263,7 @@ class SessionParser:
             "world_state": self.parse_world_state(),
             "log": self.parse_log(),
         }
+        return filter_hidden(result)
 
 
 # =============================================================================
@@ -1577,7 +1491,11 @@ class KnowledgePanel(Static):
 
 
 class TracesPanel(Static):
-    """Traces of Truth progress display."""
+    """Traces of Truth — shows only discovered traces.
+
+    The total count, layer structure, and undiscovered trace details are
+    hidden from the player to avoid spoiling the progression mystery.
+    """
 
     def __init__(self, data: dict, lang: str = "en", **kwargs):
         super().__init__(**kwargs)
@@ -1587,9 +1505,7 @@ class TracesPanel(Static):
     def render(self) -> Group:
         L = LABELS[self.lang]
         traces = self.data.get("traces", {})
-        total_discovered = traces.get("total_discovered", 0)
-        total_max = traces.get("total_max", 16)
-        layers = traces.get("layers", [])
+        discovered = traces.get("discovered", [])
         parts = []
 
         # Title
@@ -1598,58 +1514,28 @@ class TracesPanel(Static):
         parts.append(title)
         parts.append(Text(""))
 
-        # Overall progress
-        overall = Text()
-        overall.append(f"  {L['total']}: {total_discovered}/{total_max}  ", style=f"bold {CLR_TEXT}")
-        overall.append_text(bar(total_discovered, total_max, width=30,
-                                fill_style=CLR_ACCENT, empty_style=CLR_DIM))
-        parts.append(overall)
+        # Discovered count (without revealing total)
+        count_line = Text()
+        count_line.append(f"  {L.get('discovered', 'Discovered')}: ", style=f"bold {CLR_TEXT}")
+        count_line.append(f"{len(discovered)}", style=f"bold {CLR_ACCENT}")
+        parts.append(count_line)
         parts.append(Text(""))
 
-        layer_names = {
-            1: "The Surface / \u8868\u5c42",
-            2: "The Conspiracy / \u9634\u8c0b",
-            3: "The Signal / \u4fe1\u53f7",
-            4: "The Architects / \u8bbe\u8ba1\u8005",
-            5: "The Choice / \u6289\u62e9",
-        }
-        layer_colors = {1: "white", 2: CLR_PRIMARY, 3: CLR_ACCENT, 4: CLR_WARNING, 5: CLR_GREEN}
-
-        for layer_data in layers:
-            layer_num = layer_data.get("layer", 0)
-            discovered = layer_data.get("discovered", 0)
-            total = layer_data.get("total", 0)
-            layer_traces = layer_data.get("traces", [])
-            color = layer_colors.get(layer_num, CLR_TEXT)
-            layer_name = layer_names.get(layer_num, f"Layer {layer_num}")
-
-            # Layer progress line
-            layer_line = Text()
-            layer_line.append("  ", style="")
-            for i in range(total):
-                if i < discovered:
-                    layer_line.append("\u25c6", style=f"bold {color}")
-                else:
-                    layer_line.append("\u25cb", style=CLR_DIM)
-            layer_line.append(f" {L['layer']} {layer_num}: {discovered}/{total}  ", style=color)
-            layer_line.append(layer_name, style=color)
-            parts.append(layer_line)
-
-            # Individual traces
-            for trace in layer_traces:
+        if discovered:
+            for d in discovered:
                 trace_line = Text()
-                if trace.get("discovered"):
-                    trace_line.append("      \u25c6 ", style=f"bold {color}")
-                    trace_line.append(trace.get("text", ""), style=color)
-                else:
-                    trace_line.append("      \u25cb ", style=CLR_DIM)
-                    trace_line.append("[???]", style=CLR_DIM)
+                trace_line.append("    \u25c6 ", style=f"bold {CLR_ACCENT}")
+                trace_id = d.get("id", "")
+                desc = d.get("description", "")
+                turn = d.get("turn_discovered")
+                trace_line.append(f"[{trace_id}] ", style=f"bold {CLR_PRIMARY}")
+                trace_line.append(desc, style=CLR_TEXT)
+                if turn is not None:
+                    trace_line.append(f"  (Turn {turn})", style=CLR_DIM)
                 parts.append(trace_line)
-
             parts.append(Text(""))
-
-        if not layers:
-            parts.append(Text(f"  {L['no_data']}", style=CLR_DIM))
+        else:
+            parts.append(Text(f"  {L.get('no_traces', 'No traces discovered yet.')}", style=CLR_DIM))
 
         return Group(*parts)
 
@@ -2023,8 +1909,6 @@ class WorldPanel(Static):
                 if d.get("chinese"):
                     d_line.append(f" ({d['chinese']})", style=CLR_DIM)
                 d_line.append(f" [{status}]", style=status_color)
-                if d.get("notes"):
-                    d_line.append(f" - {d['notes']}", style=CLR_DIM)
                 parts.append(d_line)
 
             parts.append(Text(""))

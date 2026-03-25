@@ -108,7 +108,7 @@ This determines the player's starting location and the first NPC they are likely
 
 Create the `session/` folder and all required files with initial contents.
 
-### Create `session/player.md`
+### Create `session/player.json`
 
 Use the template from `game/sessions.md`. Fill in:
 - Name: from Step 3a
@@ -124,7 +124,7 @@ Use the template from `game/sessions.md`. Fill in:
 - Status Effects: None
 - Turn Counter: 0
 
-### Create `session/world_state.md`
+### Create `session/world_state.json`
 
 Use the template from `game/sessions.md`. Fill in:
 - Void Corruption: 8% (world starts partially corrupted)
@@ -139,7 +139,7 @@ Use the template from `game/sessions.md`. Fill in:
 - Malachar's Awareness: Dormant
 - Known Rift Gates: player's starting Realm only
 
-### Create `session/location.md`
+### Create `session/location.json`
 
 Use the template from `game/sessions.md`. Set location based on player's starting Realm choice:
 
@@ -161,7 +161,7 @@ Use the template from `game/sessions.md`. Set location based on player's startin
 - Zone: The Frost Approach (the surface wasteland above the crystal sea)
 - Describe: howling wind, white stone and grey sky, distant shimmer of crystal below the ice, extreme cold
 
-### Create `session/inventory.md`
+### Create `session/inventory.json`
 
 Use the template from `game/sessions.md`. Fill in starting inventory based on subclass:
 
@@ -173,7 +173,7 @@ Use the template from `game/sessions.md`. Fill in starting inventory based on su
 
 **Plus subclass-specific equipment:** (listed in Step 3b)
 
-### Create `session/log.md`
+### Create `session/log.json`
 
 Create with first entry:
 
@@ -186,7 +186,7 @@ Create with first entry:
 ---
 ```
 
-### Create `session/npcs.md`
+### Create `session/npcs.json`
 
 Create with no entries yet (player has not met anyone):
 
@@ -196,7 +196,7 @@ Create with no entries yet (player has not met anyone):
 *No NPCs encountered yet.*
 ```
 
-### Create `session/companions.md`
+### Create `session/companions.json`
 
 Create as empty:
 
@@ -208,7 +208,7 @@ Create as empty:
 *No companions yet.*
 ```
 
-### Create `session/quests.md`
+### Create `session/quests.json`
 
 Create as empty:
 
@@ -251,7 +251,7 @@ Present the player's completed character to them in a formatted block:
 
 ## Step 6: Opening Scene
 
-Read `session/location.md` and present a vivid opening scene to the player. Include:
+Read `session/location.json` and present a vivid opening scene to the player. Include:
 
 1. The immediate environment (from location.md description)
 2. A sense of the Void's presence — slight, distant, but unmistakably there

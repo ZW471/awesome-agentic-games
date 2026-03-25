@@ -24,7 +24,7 @@ Read the following files:
 Read `settings/custom.json` and apply all configuration values.
 
 ### Step 4 — List Available Saves
-List all directories inside `saves/`. For each save, read its `player.md`, `location.md`, and `world_state.md` to display:
+List all directories inside `saves/`. For each save, read its `player.json`, `location.json`, and `world_state.json` to display:
 - Character name and subclass
 - Current location
 - Void Corruption percentage
@@ -51,7 +51,7 @@ Copy all files from `saves/<chosen_name>/` into `session/`, overwriting existing
 Confirm the restore:
 > "Save '[name]' loaded. Resuming as [character name] in [location]."
 
-Then perform the between-session housekeeping defined in `agent/system.md`, present the current scene from `session/location.md`, and resume gameplay following `agent/game.md`.
+Then perform the between-session housekeeping defined in `agent/system.md`, present the current scene from `session/location.json`, and resume gameplay following `agent/game.md`.
 
 ---
 

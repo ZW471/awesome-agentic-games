@@ -8,19 +8,19 @@ This file defines the in-session gameplay rules — the turn structure, knowledg
 
 Each player action constitutes one turn. On every turn, the agent must:
 
-1. **Read State**: Read relevant `session/` files (at minimum: `player.md`, `location.md`, `world_state.md`).
+1. **Read State**: Read relevant `session/` files (at minimum: `player.json`, `location.json`, `world_state.json`).
 2. **Validate Action**: Check if the action is possible given current state, location, and access.
 3. **Execute Action**: Process the action according to the rules below.
 4. **Check Knowledge Triggers**: After the action, check if any new traces should be discovered based on accumulated knowledge.
 5. **Update Session Files**: Write all changes to the appropriate `session/` files.
 6. **Advance World State**:
-   - Increment turn count in `player.md`.
+   - Increment turn count in `player.json`.
    - Advance time if due (every 3 turns).
    - Advance NEXUS Alert based on player actions.
    - Advance Fragment Decay if applicable.
    - Check world event triggers.
 7. **Check Consequence Triggers**: Check for death conditions, ending conditions, NPC events.
-8. **Log**: Add entry to `log.md`.
+8. **Log**: Add entry to `log.json`.
 9. **Auto-save**: If due (every `auto_save_turns` turns).
 10. **Narrate**: Present the result to the player in the appropriate narrative style.
 
@@ -74,6 +74,17 @@ Each trace has specific discovery conditions. The agent checks these after every
 |-------|-------------|-------------------|
 | TRACE-L5-01 | You are the convergence point — the first true bridge between human and proto-consciousness | Reach The Resonance + deep Signal communion + Echo becomes coherent |
 | TRACE-L5-02 | The Severance didn't fully kill the proto-consciousness because it had already become part of humanity — you can't kill what you've become | Combine Architect's data + Patch's intuition + Echo's communication + personal experience in The Resonance |
+
+### Discovery-Gated Information Principle
+
+**The player-facing session state must never reveal anything the player has not yet discovered through gameplay.** This applies to all session files, including what the TUI displays:
+
+- **Districts**: The `district_access` array in `world_state.json` must only contain districts the player knows about. Undiscovered districts live in the hidden `_district_registry`. When the player discovers a district (an NPC mentions it, they find a map, they stumble upon an entrance, etc.), move it from `_district_registry.undiscovered` to `district_access` — but **never include the `unlock` field** in the visible entry. The player should learn access requirements through gameplay, not from the UI.
+- **Traces**: Undiscovered traces show `[???]` — never hint at their content.
+- **NPCs**: Only add NPCs to `npcs.json` after the player has encountered or heard about them.
+- **Knowledge**: Only add entries when the player has actually learned the information.
+
+This is a core design principle: the UI is part of the game world. If the player shouldn't know it yet, the UI must not show it.
 
 ### Content Unlocking Rules
 
@@ -175,7 +186,7 @@ Fragment Decay (0-100%) represents the dying of the proto-consciousness fragment
 
 ## Consequence System (Gradual Endings)
 
-Choices don't kill immediately — they shift the story's trajectory. Track this in `world_state.md` → `ending_trajectory`.
+Choices don't kill immediately — they shift the story's trajectory. Track this in `world_state.json` → `_ending_trajectory`.
 
 ### Trajectory Influences
 | Action Pattern | Pushes Toward |
@@ -189,11 +200,11 @@ Choices don't kill immediately — they shift the story's trajectory. Track this
 
 ### Information Poisoning
 If the player trusts the wrong NPCs:
-- **Director Orin** feeds plausible-but-distorted facts that frame NEXUS positively and fragments as dangerous. These enter knowledge.md as "facts" but are actually false. The player won't know unless they find contradicting evidence.
+- **Director Orin** feeds plausible-but-distorted facts that frame NEXUS positively and fragments as dangerous. These enter knowledge.json as "facts" but are actually false. The player won't know unless they find contradicting evidence.
 - **Senator Lian** frames the Severance as necessary and the proto-consciousness as a threat. Her facts are true but selectively presented to push toward Purification.
 - **False rumors** from unreliable minor NPCs can lead to wrong theories, which may lock the player into bad paths.
 
-The agent tracks which "facts" are actually distortions. If the player later finds contradicting evidence, the distorted facts are re-marked in knowledge.md.
+The agent tracks which "facts" are actually distortions. If the player later finds contradicting evidence, the distorted facts are re-marked in knowledge.json.
 
 ---
 
@@ -307,3 +318,15 @@ Every 10 turns, something should happen regardless of player action — a world 
 - An Echo manifestation
 
 These events advance the story even when the player is idle and may create new investigation opportunities.
+
+---
+
+### Hidden Fields for TUI
+
+The following session data is tracked by the agent but MUST be hidden from the TUI display using the `"hidden": true` convention in JSON:
+
+- **traces.json → `_gate_system`**: The full layer structure, total trace count, and layer assignments. The player should discover traces organically — showing the total count or layer structure would spoil the progression mystery.
+- **knowledge.json → `_layer` on each entry**: Which truth layer a piece of knowledge belongs to. Revealing layer assignments would let the player reverse-engineer the knowledge gate system.
+- **world_state.json → `_ending_trajectory`**: The agent's internal tracking of which ending the player is heading toward. This must never be revealed to the player.
+
+When writing these files, always wrap the hidden data in a JSON object with `"hidden": true`. The TUI's `filter_hidden()` function will strip these objects before display.

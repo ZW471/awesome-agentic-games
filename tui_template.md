@@ -123,30 +123,43 @@ The terminal is started in `on_mount()` and cleaned up in `on_unmount()`.
 
 ## Session Parser Design
 
-The parser is a single class (`SessionParser`) that takes the game root directory as input and provides a `parse_*()` method for each session file type. Each method returns a `dict` (or `list[dict]`) of structured data extracted from the raw markdown.
+The parser is a single class (`SessionParser`) that takes the game root directory as input and provides a `parse_*()` method for each session file type. Each method returns a `dict` (or `list[dict]`) loaded directly from JSON.
 
 ### Parsing Strategy
 
-Session files follow predictable markdown patterns. The parser uses regex to extract:
+All session files use **JSON format** (`.json` extension). The parser loads each file with `json.load()` — no regex or markdown parsing is needed. This eliminates parsing fragility across languages and formatting variations.
 
-| Pattern | Example | Extraction |
-|---------|---------|------------|
-| `**Key:** Value` | `**HP:** 73 / 100` | Key-value pairs, optionally split on `/` |
-| `\| col1 \| col2 \|` | Markdown tables | Row-by-row cell extraction |
-| `- [x] Item` / `- [ ] Item` | Checklists | Boolean + label |
-| `## Section` | Section headers | Section-level splitting |
-| `---` | Horizontal rules | Record-level splitting (e.g., between NPC blocks) |
-| `## [Turn N] — Title` | Log entries | Turn number + title + body text |
+```python
+def _read_json(self, path: Path) -> dict:
+    """Read a JSON file, returning empty dict if missing or invalid."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+        return {}
+```
 
-**Key principle:** The parser must be tolerant. If a file is missing or a field can't be found, return an empty dict or sensible default — never crash. Games may not populate all fields immediately, and different games will have different schemas.
+**Key principle:** The parser must be tolerant. If a file is missing or contains invalid JSON, return an empty dict or sensible default — never crash. Games may not populate all fields immediately, and different games will have different schemas.
 
-**Multilingual parsing:** When a game supports multiple languages, the agent may write session files with bilingual or localized labels (e.g., `**<localized> / Name:** <value>`, `## <localized> / Status Effects`, `## 【<localized> N】— Title [tag]`). Regex patterns must account for this:
+### Hidden Field Filtering
 
-- **Field extraction** (`**Key:** Value`): Match the English key name anywhere within the bold label, not just at the start. Use `rf"\*\*[^*]*{re.escape(field)}[^*]*:\*\*\s*(.+)"` instead of `rf"\*\*{re.escape(field)}:\*\*\s*(.+)"`. This way `**<localized> / Name:**` matches when searching for `"Name"`.
-- **Section headings** (`## Heading`): Same approach — match the English heading anywhere in the line. Use `rf"##\s+[^\n]*{re.escape(heading)}[^\n]*\n"` instead of `rf"##\s+{re.escape(heading)}[^\n]*\n"`.
-- **Log turn markers** (`## [Turn N] — Title`): The agent may use localized bracket styles or keywords instead of the English `[Turn N]`. Use alternation patterns to match all expected variants and extract the turn number from whichever group matched.
+Session JSON files may contain objects marked with `"hidden": true`. These are agent-internal data that must **not** be displayed to the player in the TUI. The parser provides a `filter_hidden()` utility that recursively strips hidden objects from parsed data before passing it to panel widgets:
 
-As a general rule: never assume labels, headings, or structural markers will be in English only. Anchor regex patterns on the English portion as a substring match within flexible surrounding content.
+```python
+def filter_hidden(data):
+    """Recursively remove any dict with 'hidden': True from the data tree."""
+    if isinstance(data, dict):
+        if data.get("hidden") is True:
+            return None
+        return {k: v for k, v in ((k, filter_hidden(v)) for k, v in data.items()) if v is not None}
+    if isinstance(data, list):
+        return [item for item in (filter_hidden(i) for i in data) if item is not None]
+    return data
+```
+
+The `parse_all()` method applies `filter_hidden()` to the combined result before returning it, so panel widgets never see hidden data. The raw (unfiltered) data remains available to the agent for internal game logic.
+
+**Multilingual support:** Since session files are JSON, multilingual content is handled naturally via key-value pairs (e.g., `"name": "洪杰"`, `"name_en": "Hong Jie"`) rather than regex-based label matching. The TUI can choose which key to display based on a language setting.
 
 ### Recommended Parser Methods
 
@@ -165,8 +178,10 @@ class SessionParser:
     def parse_quests(self) -> dict:        # Active + completed quests
     def parse_log(self) -> list[dict]:     # Session log entries
     def parse_settings(self) -> dict:      # Game settings (from settings/ dir)
-    def parse_all(self) -> dict:           # Calls all of the above
+    def parse_all(self) -> dict:           # Calls all of the above, applies filter_hidden()
 ```
+
+Each `parse_*()` method simply calls `self._read_json()` on the corresponding `.json` file and returns the result. Game-specific transformation (e.g., computing derived values, flattening nested structures for display) can be done in the method body or in the panel widget's `render()`.
 
 Adapt this to the game's actual `sessions.md` schema. A strategy game might replace `parse_player` with `parse_faction` and `parse_resources`. A mystery game might add `parse_clues` and `parse_suspects`. Not every game will have all of these — add, rename, or remove methods to match what the game tracks.
 
@@ -486,7 +501,7 @@ When building a TUI for a new game:
 1. **Copy `tui_template.py`** into the game's `tui/` folder and rename to `tui_viewer.py`.
 2. **Set up the venv** — run `uv venv` in the game root (if not already created for `tools/`), then `uv pip install textual pyte`.
 3. **Read `game/sessions.md`** to understand what files exist in `session/` and their schemas.
-4. **Customize the `SessionParser`** — write `parse_*()` methods for each session file, matching the markdown patterns that game uses. Look for `CUSTOMIZE` markers in the template.
+4. **Customize the `SessionParser`** — write `parse_*()` methods for each session `.json` file. Since session files are JSON, each method is typically a simple `self._read_json()` call plus any game-specific transformation. Look for `CUSTOMIZE` markers in the template. Ensure `filter_hidden()` is applied in `parse_all()` so hidden fields are never passed to panel widgets.
 5. **Choose which tabs to include** based on what data the game tracks. Add/remove `TabPane` entries in `_compose_tab_panes()`.
 6. **Customize panel widgets** — update each panel's `render()` method to display your game's data. Add new panel classes for game-specific tabs.
 7. **Match the visual theme** to the game's tone. A horror game might use red/grey; a lighthearted game might use brighter colors. The color tables above are starting points, not requirements.

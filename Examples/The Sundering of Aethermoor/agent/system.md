@@ -60,10 +60,10 @@ Triggered by `LOAD GAME.md`. Steps:
 3. Read `settings/custom.json`
 4. List all directories under `saves/`. For each, display:
    - Save name
-   - Character name and subclass (read from `saves/<name>/player.md`)
-   - Current location (read from `saves/<name>/location.md`, first line)
-   - Void Corruption % (read from `saves/<name>/world_state.md`)
-   - Turn count (read from `saves/<name>/player.md`)
+   - Character name and subclass (read from `saves/<name>/player.json`)
+   - Current location (read from `saves/<name>/location.json`, first line)
+   - Void Corruption % (read from `saves/<name>/world_state.json`)
+   - Turn count (read from `saves/<name>/player.json`)
 
    Format example:
    ```
@@ -76,7 +76,7 @@ Triggered by `LOAD GAME.md`. Steps:
 6. If `session/` folder exists: warn the player it will be overwritten. Ask for confirmation.
 7. Copy all files from `saves/<chosen_name>/` into `session/`, overwriting existing files
 8. Confirm the load: *"Save '[name]' loaded. Resuming from [location]."*
-9. Present the current scene from `session/location.md` and resume gameplay
+9. Present the current scene from `session/location.json` and resume gameplay
 
 ### Error: No Saves Found
 If `saves/` is empty or does not exist:
@@ -92,10 +92,10 @@ If a save's files are missing or unreadable:
 
 Triggered by `SAVE GAME.md`. Steps:
 
-1. Verify `session/` folder exists and contains `player.md`. If not:
+1. Verify `session/` folder exists and contains `player.json`. If not:
    > "No active game session found. Start a new game with @NEW GAME.md or load one with @LOAD GAME.md."
 
-2. Read active `<save_name>` from `session/player.md` (the Save Name field).
+2. Read active `<save_name>` from `session/player.json` (the Save Name field).
 
 3. If `saves/<save_name>/` already exists: overwrite silently (this is expected behavior).
 
@@ -120,7 +120,7 @@ At the start of any load or resume, verify the session is consistent:
 
 3. **Player HP bounds:** Current HP must be between 0 and max HP. Clamp if necessary.
 
-4. **Shard count consistency:** Count checked shards in `player.md` and compare to Shard status in `world_state.md`. If inconsistent, trust `world_state.md`.
+4. **Shard count consistency:** Count checked shards in `player.json` and compare to Shard status in `world_state.json`. If inconsistent, trust `world_state.json`.
 
 5. **Turn counter:** Must be a non-negative integer. If missing or invalid, set to the last log entry number.
 
@@ -171,11 +171,11 @@ Key files and what they are authoritative for:
 
 | File | Authoritative For |
 |------|------------------|
-| `session/player.md` | All player stats, HP, MP, Rift Points, abilities, turn count |
-| `session/world_state.md` | Void Corruption %, Realm status, Shard status, Malachar awareness |
-| `session/location.md` | Current location, exits, interactables, NPCs present |
-| `session/inventory.md` | All items, gold, slots used |
-| `session/log.md` | Event history |
-| `session/npcs.md` | All encountered NPC states and dispositions |
-| `session/companions.md` | Active companion states |
-| `session/quests.md` | All quest states |
+| `session/player.json` | All player stats, HP, MP, Rift Points, abilities, turn count |
+| `session/world_state.json` | Void Corruption %, Realm status, Shard status, Malachar awareness |
+| `session/location.json` | Current location, exits, interactables, NPCs present |
+| `session/inventory.json` | All items, gold, slots used |
+| `session/log.json` | Event history |
+| `session/npcs.json` | All encountered NPC states and dispositions |
+| `session/companions.json` | Active companion states |
+| `session/quests.json` | All quest states |

@@ -9,13 +9,13 @@
 A save has been requested. Follow these steps in order.
 
 ### Step 1 — Verify Active Session
-Check that `session/player.md` exists. If it does not:
+Check that `session/player.json` exists. If it does not:
 > "No active game session found. Start a new game with @NEW GAME.md or load one with @LOAD GAME.md."
 
 Stop here if no session is found.
 
 ### Step 2 — Get Save Name
-Read the Save Name from `session/player.md` (the "Save Name" field under Identity). This is the `<save_name>` established when the game was started.
+Read the Save Name from `session/player.json` (the "Save Name" field under Identity). This is the `<save_name>` established when the game was started.
 
 ### Step 3 — Save the Session
 Copy all files from `session/` into `saves/<save_name>/`, preserving all file names and subdirectory structure. Overwrite any existing files with the same names.

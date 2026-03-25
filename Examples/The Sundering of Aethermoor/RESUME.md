@@ -24,28 +24,28 @@ Read the following files:
 Read `settings/custom.json` and apply all configuration values.
 
 ### Step 4 — Verify Active Session
-Check that `session/player.md` exists. If it does not:
+Check that `session/player.json` exists. If it does not:
 > "No active game session found. Start a new game with @NEW GAME.md or load a save with @LOAD GAME.md."
 
 Stop here if no session is found.
 
 ### Step 5 — Read Session State
 Read all files in the `session/` folder to fully restore the game state:
-- `session/player.md` — character identity, stats, and status
-- `session/location.md` — current location and scene
-- `session/inventory.md` — carried items
-- `session/companions.md` — active companions
-- `session/npcs.md` — nearby NPC states
-- `session/quests.md` — quest progress
-- `session/world_state.md` — global world state and Void Corruption
-- `session/log.md` — event history
-- `session/malachar_visions.md` — vision tracking (if present)
+- `session/player.json` — character identity, stats, and status
+- `session/location.json` — current location and scene
+- `session/inventory.json` — carried items
+- `session/companions.json` — active companions
+- `session/npcs.json` — nearby NPC states
+- `session/quests.json` — quest progress
+- `session/world_state.json` — global world state and Void Corruption
+- `session/log.json` — event history
+- `session/malachar_visions.json` — vision tracking (if present)
 
 ### Step 6 — Resume Play
 Present a brief status recap to orient the player:
 > "Resuming as **[character name]** ([subclass]) in **[current location]**. Turn [N] — Void Corruption: [X]%."
 
-Then present the current scene from `session/location.md` and resume gameplay following `agent/game.md`.
+Then present the current scene from `session/location.json` and resume gameplay following `agent/game.md`.
 
 ---
 

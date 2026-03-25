@@ -7,24 +7,24 @@ Read these files and folders:
 1. `agent/system.md`, `agent/player.md`, `agent/game.md`
 2. `game/background.md`, `game/npcs.md`, `game/sessions.md`
 3. `settings/custom.json`
-4. `session/
+4. `session/`
 
 ## Step 2: Verify Session Exists
-Check that `session/player.md` exists. If it doesn't, inform the player:
+Check that `session/player.json` exists. If it doesn't, inform the player:
 
 > No active session found. Start a new game with `NEW GAME.md` or load a save with `LOAD GAME.md`.
 > 未找到活跃的游戏会话。请使用 `NEW GAME.md` 开始新游戏，或使用 `LOAD GAME.md` 读取存档。
 
 ## Step 3: Restore Full State
 Read ALL files in `session/`:
-- `player.md` — Character status
-- `knowledge.md` — Everything the player has learned
-- `traces.md` — Truth layer progress
-- `location.md` — Current position and scene
-- `inventory.md` — Items carried
-- `npcs.md` — NPC relationships
-- `world_state.md` — Global state
-- `log.md` — Event history
+- `player.json` — Character status
+- `knowledge.json` — Everything the player has learned
+- `traces.json` — Truth layer progress
+- `location.json` — Current position and scene
+- `inventory.json` — Items carried
+- `npcs.json` — NPC relationships
+- `world_state.json` — Global state
+- `log.json` — Event history
 
 ## Step 4: Status Recap
 Present a brief, atmospheric recap:
@@ -47,6 +47,6 @@ Present a brief, atmospheric recap:
 ```
 
 ## Step 5: Present Scene and Resume
-1. Describe the current scene from `session/location.md` — where the player is, what's around them, who's nearby.
+1. Describe the current scene from `session/location.json` — where the player is, what's around them, who's nearby.
 2. Reference the most recent log entries to remind the player what was happening.
 3. Resume the gameplay loop (`agent/game.md`). Let the player take their next action.

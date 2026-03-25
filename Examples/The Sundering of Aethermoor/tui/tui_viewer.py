@@ -18,7 +18,6 @@ import fcntl
 import json
 import os
 import pty
-import re
 import struct
 import subprocess
 import termios
@@ -528,10 +527,24 @@ class PtyTerminal(Static, can_focus=True):
         self.master_fd = None
 
 
+# ─── Hidden Field Filter ─────────────────────────────────────────────────────
+
+
+def filter_hidden(data):
+    """Recursively remove any dict containing 'hidden': True from the data tree."""
+    if isinstance(data, dict):
+        if data.get("hidden") is True:
+            return None
+        return {k: v for k, v in ((k, filter_hidden(v)) for k, v in data.items()) if v is not None}
+    if isinstance(data, list):
+        return [item for item in (filter_hidden(i) for i in data) if item is not None]
+    return data
+
+
 # ─── Session Parser ───────────────────────────────────────────────────────────
 
 class SessionParser:
-    """Parses all markdown and JSON files from an agentic game session."""
+    """Parses all JSON files from an agentic game session."""
 
     def __init__(self, game_dir: str):
         self.game_dir = Path(game_dir)
@@ -539,6 +552,13 @@ class SessionParser:
         self.settings_dir = self.game_dir / "settings"
         self.game_data_dir = self.game_dir / "game"
         self.tools_dir = self.game_dir / "tools"
+
+    def _read_json(self, path: Path) -> dict:
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+            return {}
 
     def _read(self, path: Path) -> str:
         try:
@@ -548,306 +568,137 @@ class SessionParser:
 
     # ── Player ────────────────────────────────────────────────────────────
     def parse_player(self) -> dict:
-        text = self._read(self.session_dir / "player.md")
-        if not text:
+        data = self._read_json(self.session_dir / "player.json")
+        if not data:
             return {}
-        p = {}
-        # Name
-        m = re.search(r"# Player:\s*(.+)", text)
-        p["name"] = m.group(1).strip() if m else "Unknown"
-        # Class / Subclass
-        m = re.search(r"\*\*Class:\*\*\s*(.+)", text)
-        p["class"] = m.group(1).strip() if m else "Unknown"
-        # Save name
-        m = re.search(r"\*\*Save Name:\*\*\s*(.+)", text)
-        p["save_name"] = m.group(1).strip() if m else ""
-        # Stats table
-        p["stats"] = {}
-        for m in re.finditer(r"\|\s*(HP|MP|STR|INT|AGI)\s*\|\s*(\d+)\s*\|\s*(\d+)\s*\|", text):
-            p["stats"][m.group(1)] = {"base": int(m.group(2)), "current": int(m.group(3))}
-        # Rift Points
-        m = re.search(r"\*\*Rift Points:\*\*\s*(\d+)\s*/\s*(\d+)", text)
-        if m:
-            p["rift_points"] = {"current": int(m.group(1)), "max": int(m.group(2))}
-        # Shards
-        p["shards"] = []
-        for m in re.finditer(r"- \[([ xX])\]\s*(.+?)(?:\n|$)", text):
-            p["shards"].append({
-                "collected": m.group(1).strip().lower() == "x",
-                "name": m.group(2).strip()
-            })
-        # Abilities
-        p["abilities"] = []
-        in_abilities = False
-        for line in text.split("\n"):
-            if "## Active Abilities" in line:
-                in_abilities = True
-                continue
-            if in_abilities and line.startswith("## "):
-                break
-            if in_abilities and line.startswith("- **"):
-                p["abilities"].append(line.strip("- ").strip())
-        # Status Effects
-        p["status_effects"] = []
-        in_status = False
-        for line in text.split("\n"):
-            if "## Status Effects" in line:
-                in_status = True
-                continue
-            if in_status and line.startswith("## "):
-                break
-            if in_status and line.strip() and line.strip().lower() != "none":
-                if line.startswith("- "):
-                    p["status_effects"].append(line.strip("- ").strip())
-                elif not line.startswith("#"):
-                    p["status_effects"].append(line.strip())
-        # Turn counter
-        m = re.search(r"\*\*Turns Elapsed:\*\*\s*(\d+)", text)
-        p["turns"] = int(m.group(1)) if m else 0
+        # Map shards_collected to the "shards" key expected by CharacterPanel
+        shards = data.get("shards_collected", [])
+        p = {
+            "name": data.get("name", "Unknown"),
+            "class": data.get("class", "Unknown"),
+            "save_name": data.get("save_name", ""),
+            "stats": data.get("stats", {}),
+            "rift_points": data.get("rift_points", {}),
+            "shards": [{"collected": s.get("collected", False), "name": s.get("name", "")} for s in shards],
+            "abilities": [],
+            "status_effects": data.get("status_effects", []),
+            "turns": data.get("turns", 0),
+        }
+        # Format abilities as display strings for the panel
+        for ab in data.get("active_abilities", []):
+            cost = ab.get("cost")
+            ab_type = ab.get("type", "")
+            if cost:
+                p["abilities"].append(f"**{ab['name']}** ({ab_type}, {cost}): {ab.get('description', '')}")
+            else:
+                p["abilities"].append(f"**{ab['name']}** ({ab_type}): {ab.get('description', '')}")
         return p
 
     # ── World State ───────────────────────────────────────────────────────
     def parse_world_state(self) -> dict:
-        text = self._read(self.session_dir / "world_state.md")
-        if not text:
+        data = self._read_json(self.session_dir / "world_state.json")
+        if not data:
             return {}
-        w = {}
-        m = re.search(r"\*\*Current Corruption:\*\*\s*(\d+)%", text)
-        w["corruption"] = int(m.group(1)) if m else 0
-        m = re.search(r"\*\*Corruption Rate:\*\*\s*([\d.]+)%", text)
-        w["corruption_rate"] = float(m.group(1)) if m else 1.0
-        m = re.search(r"\*\*Status:\*\*\s*(\w+)", text)
-        w["status"] = m.group(1) if m else "Unknown"
-        # Realms
-        w["realms"] = []
-        for m in re.finditer(r"\|\s*(Emberveil|Thornwood|Crystalmere|Ashen Wastes|Skyreach)\s*\|\s*(\w+)\s*\|\s*(.+?)\s*\|", text):
-            w["realms"].append({"name": m.group(1), "status": m.group(2), "notes": m.group(3).strip()})
-        # Shards
-        w["shards"] = []
-        for m in re.finditer(r"\|\s*(\w[\w\s]*Shard)\s*\|\s*(.+?)\s*\|\s*(\w[\w\s]*)\s*\|", text):
-            w["shards"].append({"name": m.group(1).strip(), "location": m.group(2).strip(), "status": m.group(3).strip()})
-        # Malachar
-        m = re.search(r"Malachar's Awareness.*?\n\*\*Level:\*\*\s*(\w+)", text, re.DOTALL)
-        w["malachar"] = m.group(1) if m else "Unknown"
-        # Rift Gates
-        w["rift_gates"] = []
-        in_gates = False
-        for line in text.split("\n"):
-            if "Known Rift Gate" in line:
-                in_gates = True
-                continue
-            if in_gates and line.startswith("- "):
-                w["rift_gates"].append(line.strip("- ").strip())
+        vc = data.get("void_corruption", {})
+        ma = data.get("malachar_awareness", {})
+        w = {
+            "corruption": vc.get("current", 0),
+            "corruption_rate": vc.get("rate", 1.0),
+            "status": vc.get("status", "Unknown"),
+            "realms": [{"name": r["name"], "status": r["status"], "notes": r.get("notes", "")} for r in data.get("realm_status", [])],
+            "shards": [{"name": s["shard"], "location": s["location"], "status": s["status"]} for s in data.get("shards_status", [])],
+            "malachar": ma.get("level", "Unknown"),
+            "rift_gates": data.get("known_rift_gates", []),
+        }
         return w
 
     # ── Location ──────────────────────────────────────────────────────────
     def parse_location(self) -> dict:
-        text = self._read(self.session_dir / "location.md")
-        if not text:
+        data = self._read_json(self.session_dir / "location.json")
+        if not data:
             return {}
-        loc = {}
-        m = re.search(r"\*\*Realm:\*\*\s*(.+)", text)
-        loc["realm"] = m.group(1).strip() if m else ""
-        m = re.search(r"\*\*Area:\*\*\s*(.+)", text)
-        loc["area"] = m.group(1).strip() if m else ""
-        m = re.search(r"\*\*Zone:\*\*\s*(.+)", text)
-        loc["zone"] = m.group(1).strip() if m else ""
-        # Description
-        m = re.search(r"## Description\n(.+?)(?=\n## )", text, re.DOTALL)
-        loc["description"] = m.group(1).strip() if m else ""
-        # Exits
-        loc["exits"] = []
-        in_exits = False
-        for line in text.split("\n"):
-            if "## Exits" in line:
-                in_exits = True
-                continue
-            if in_exits and line.startswith("## "):
-                break
-            if in_exits and line.startswith("- "):
-                loc["exits"].append(line.strip("- ").strip())
-        # Points of interest
-        loc["poi"] = []
-        in_poi = False
-        for line in text.split("\n"):
-            if "## Points of Interest" in line:
-                in_poi = True
-                continue
-            if in_poi and line.startswith("## "):
-                break
-            if in_poi and line.startswith("- "):
-                loc["poi"].append(line.strip("- ").strip())
-        # NPCs
-        m = re.search(r"## NPCs Present\n(.+?)(?=\n## )", text, re.DOTALL)
-        loc["npcs"] = m.group(1).strip() if m else "None"
-        # Rift Gate
-        m = re.search(r"## Rift Gate\n(.+?)(?=\n## |\Z)", text, re.DOTALL)
-        loc["rift_gate"] = m.group(1).strip() if m else "None"
-        # Void Presence
-        m = re.search(r"## Void Presence\n(.+?)(?=\n## |\Z)", text, re.DOTALL)
-        loc["void_presence"] = m.group(1).strip() if m else "None"
-        return loc
+        # Map exits from structured objects to display strings
+        exits = []
+        for e in data.get("exits", []):
+            if isinstance(e, dict):
+                exits.append(f"**{e.get('direction', '')}:** {e.get('destination', '')}")
+            else:
+                exits.append(str(e))
+        # Map npcs_present list to a single string
+        npcs_present = data.get("npcs_present", [])
+        if isinstance(npcs_present, list):
+            npcs_str = "\n".join(f"- {n}" for n in npcs_present) if npcs_present else "None"
+        else:
+            npcs_str = str(npcs_present) if npcs_present else "None"
+        return {
+            "realm": data.get("realm", ""),
+            "area": data.get("area", ""),
+            "zone": data.get("zone", ""),
+            "description": data.get("description", ""),
+            "exits": exits,
+            "poi": data.get("points_of_interest", []),
+            "npcs": npcs_str,
+            "rift_gate": data.get("rift_gate", "None"),
+            "void_presence": data.get("void_presence", "None"),
+        }
 
     # ── Inventory ─────────────────────────────────────────────────────────
     def parse_inventory(self) -> dict:
-        text = self._read(self.session_dir / "inventory.md")
-        if not text:
+        data = self._read_json(self.session_dir / "inventory.json")
+        if not data:
             return {}
-        inv = {}
-        m = re.search(r"\*\*Gold:\*\*\s*(\d+)", text)
-        inv["gold"] = int(m.group(1)) if m else 0
-        m = re.search(r"\*\*Slots Used:\*\*\s*(\d+)\s*/\s*(\d+)", text)
-        inv["slots"] = {"used": int(m.group(1)), "max": int(m.group(2))} if m else {"used": 0, "max": 20}
-
-        def parse_table(header: str) -> list[dict]:
-            pattern = rf"## {header}\n\|.+\|\n\|[-\s|]+\|\n((?:\|.+\|\n?)*)"
-            m = re.search(pattern, text)
-            if not m:
-                return []
-            rows = []
-            for line in m.group(1).strip().split("\n"):
-                cells = [c.strip() for c in line.strip("|").split("|")]
-                rows.append(cells)
-            return rows
-
-        inv["weapons"] = parse_table("Weapons")
-        inv["armor"] = parse_table("Armor & Accessories")
-        inv["consumables"] = parse_table("Consumables")
-        inv["quest_items"] = parse_table("Quest Items")
-        inv["artifacts"] = parse_table("Artifacts")
+        inv = {
+            "gold": data.get("gold", 0),
+            "slots": {"used": data.get("slots_used", 0), "max": data.get("slots_max", 20)},
+        }
+        # Convert item dicts to lists of cell values for the table widgets
+        inv["weapons"] = [[w.get("name", ""), w.get("damage", ""), w.get("notes", "")] for w in data.get("weapons", [])]
+        inv["armor"] = [[a.get("name", ""), a.get("defense", ""), a.get("notes", "")] for a in data.get("armor", [])]
+        inv["consumables"] = [[c.get("name", ""), c.get("effect", ""), str(c.get("qty", ""))] for c in data.get("consumables", [])]
+        inv["quest_items"] = [[q.get("name", ""), q.get("quest", ""), q.get("notes", "")] for q in data.get("quest_items", [])]
+        inv["artifacts"] = [[a.get("name", ""), a.get("power", ""), a.get("notes", "")] for a in data.get("artifacts", [])]
         return inv
 
     # ── Companions ────────────────────────────────────────────────────────
     def parse_companions(self) -> dict:
-        text = self._read(self.session_dir / "companions.md")
-        if not text:
+        data = self._read_json(self.session_dir / "companions.json")
+        if not data:
             return {}
-        comp = {}
-        m = re.search(r"\*\*Slots Used:\*\*\s*(\d+)\s*/\s*(\d+)", text)
-        comp["slots"] = {"used": int(m.group(1)), "max": int(m.group(2))} if m else {"used": 0, "max": 3}
-        comp["companions"] = []
-        sections = re.split(r"\n---\n", text)
-        for sec in sections:
-            m = re.search(r"## (.+)", sec)
-            if not m:
-                continue
-            c = {"name": m.group(1).strip()}
-            for field, key in [
-                (r"\*\*Race/Class:\*\*\s*(.+)", "race_class"),
-                (r"\*\*HP:\*\*\s*(\d+)\s*/\s*(\d+)", "hp"),
-                (r"\*\*MP:\*\*\s*(\d+)\s*/\s*(\d+)", "mp"),
-                (r"\*\*Special Ability:\*\*\s*(.+)", "ability"),
-                (r"\*\*Status:\*\*\s*(.+)", "status"),
-                (r"\*\*Disposition toward player:\*\*\s*(.+)", "disposition"),
-                (r"\*\*Notes:\*\*\s*(.+)", "notes"),
-            ]:
-                fm = re.search(field, sec)
-                if fm:
-                    if key in ("hp", "mp"):
-                        c[key] = {"current": int(fm.group(1)), "max": int(fm.group(2))}
-                    else:
-                        c[key] = fm.group(1).strip()
-            comp["companions"].append(c)
-        return comp
+        return {
+            "slots": {"used": data.get("slots_used", 0), "max": data.get("slots_max", 3)},
+            "companions": data.get("companions", []),
+        }
 
     # ── NPCs ──────────────────────────────────────────────────────────────
     def parse_npcs(self) -> list[dict]:
-        text = self._read(self.session_dir / "npcs.md")
-        if not text:
+        data = self._read_json(self.session_dir / "npcs.json")
+        if not data:
             return []
-        npcs = []
-        sections = re.split(r"\n---\n", text)
-        for sec in sections:
-            m = re.search(r"## (.+)", sec)
-            if not m:
-                continue
-            npc = {"name": m.group(1).strip()}
-            for field, key in [
-                (r"\*\*Location:\*\*\s*(.+)", "location"),
-                (r"\*\*Disposition:\*\*\s*(.+)", "disposition"),
-                (r"\*\*Status:\*\*\s*(.+)", "status"),
-                (r"\*\*Quests Given:\*\*\s*(.+)", "quests_given"),
-                (r"\*\*Quests Completed:\*\*\s*(.+)", "quests_completed"),
-                (r"\*\*Notes:\*\*\s*(.+)", "notes"),
-            ]:
-                fm = re.search(field, sec)
-                if fm:
-                    npc[key] = fm.group(1).strip()
-            npcs.append(npc)
-        return npcs
+        return data.get("npcs", [])
 
     # ── Quests ────────────────────────────────────────────────────────────
     def parse_quests(self) -> dict:
-        text = self._read(self.session_dir / "quests.md")
-        if not text:
+        data = self._read_json(self.session_dir / "quests.json")
+        if not data:
             return {"active": [], "completed": []}
-
-        def parse_quest_section(section_text: str) -> list[dict]:
-            quests = []
-            blocks = re.split(r"\n---\n", section_text)
-            for block in blocks:
-                m = re.search(r"### (.+)", block)
-                if not m:
-                    continue
-                q = {"title": m.group(1).strip().rstrip(" ✓")}
-                for field, key in [
-                    (r"\*\*Given by:\*\*\s*(.+)", "given_by"),
-                    (r"\*\*Realm:\*\*\s*(.+)", "realm"),
-                    (r"\*\*Objective:\*\*\s*(.+)", "objective"),
-                    (r"\*\*Progress:\*\*\s*(.+)", "progress"),
-                    (r"\*\*Reward:\*\*\s*(.+)", "reward"),
-                    (r"\*\*Completed:\*\*\s*(.+)", "completed_turn"),
-                    (r"\*\*Outcome:\*\*\s*(.+)", "outcome"),
-                    (r"\*\*Reward received:\*\*\s*(.+)", "reward_received"),
-                ]:
-                    fm = re.search(field, block)
-                    if fm:
-                        q[key] = fm.group(1).strip()
-                quests.append(q)
-            return quests
-
-        active_text = ""
-        completed_text = ""
-        m = re.search(r"## Active Quests\n(.*?)(?=## Completed Quests|\Z)", text, re.DOTALL)
-        if m:
-            active_text = m.group(1)
-        m = re.search(r"## Completed Quests\n(.*)", text, re.DOTALL)
-        if m:
-            completed_text = m.group(1)
-
         return {
-            "active": parse_quest_section(active_text),
-            "completed": parse_quest_section(completed_text),
+            "active": data.get("active", []),
+            "completed": data.get("completed", []),
         }
 
     # ── Log ───────────────────────────────────────────────────────────────
     def parse_log(self) -> list[dict]:
-        text = self._read(self.session_dir / "log.md")
-        if not text:
+        data = self._read_json(self.session_dir / "log.json")
+        if not data:
             return []
-        entries = []
-        blocks = re.split(r"\n---\n", text)
-        for block in blocks:
-            m = re.search(r"## \[Turn (\d+)\] — (.+)\n(.+)", block, re.DOTALL)
-            if m:
-                entries.append({
-                    "turn": int(m.group(1)),
-                    "title": m.group(2).strip(),
-                    "text": m.group(3).strip(),
-                })
-        return entries
+        return data.get("entries", [])
 
     # ── Settings ──────────────────────────────────────────────────────────
     def parse_settings(self) -> dict:
-        text = self._read(self.settings_dir / "custom.json")
-        if not text:
-            text = self._read(self.settings_dir / "default.json")
-        if not text:
-            return {}
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            return {}
+        data = self._read_json(self.settings_dir / "custom.json")
+        if not data:
+            data = self._read_json(self.settings_dir / "default.json")
+        return data
 
     # ── Background ────────────────────────────────────────────────────────
     def parse_background(self) -> str:
@@ -859,7 +710,7 @@ class SessionParser:
 
     # ── Full parse ────────────────────────────────────────────────────────
     def parse_all(self) -> dict:
-        return {
+        result = {
             "player": self.parse_player(),
             "world": self.parse_world_state(),
             "location": self.parse_location(),
@@ -870,6 +721,7 @@ class SessionParser:
             "log": self.parse_log(),
             "settings": self.parse_settings(),
         }
+        return filter_hidden(result)
 
 
 # ─── Helper: progress bar as rich text ────────────────────────────────────────

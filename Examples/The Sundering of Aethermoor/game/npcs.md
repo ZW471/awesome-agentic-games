@@ -248,11 +248,11 @@ The agent may generate minor NPCs (innkeepers, guards, refugees, merchants) as n
 
 ## NPC Location Tracking
 
-The agent must track each major NPC's location in `session/npcs.md`. Major NPCs can move:
+The agent must track each major NPC's location in `session/npcs.json`. Major NPCs can move:
 - Seraphel stays in Crystalmere unless recruited
 - Korg stays in Emberveil unless recruited
 - Lirien stays in Thornwood unless recruited
 - The Pale Warden cannot leave the Ashen Wastes until his quests are complete
 - Zephyra moves between Skyreach locations but can be found via her skyship
 
-If an NPC is recruited as a companion, they travel with the player and appear in `session/companions.md` instead of their home Realm.
+If an NPC is recruited as a companion, they travel with the player and appear in `session/companions.json` instead of their home Realm.

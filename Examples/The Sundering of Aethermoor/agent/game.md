@@ -11,11 +11,11 @@ Each player turn follows this sequence:
 1. **Read state** — Before processing any action, read the relevant session files. Never rely on remembered state.
 2. **Process player action** — Resolve what the player did (see `agent/player.md` for action types).
 3. **Update session files** — Write all changes resulting from the action.
-4. **Advance Void Corruption** — Increment Void Corruption in `world_state.md`.
+4. **Advance Void Corruption** — Increment Void Corruption in `world_state.json`.
 5. **Process status effects** — Decrement all active status effect durations; remove expired ones.
-6. **Increment turn counter** — Update `player.md` turn counter.
+6. **Increment turn counter** — Update `player.json` turn counter.
 7. **Check win/loss conditions** — Evaluate end conditions (see below).
-8. **Write log entry** — Append to `session/log.md`.
+8. **Write log entry** — Append to `session/log.json`.
 9. **Auto-save check** — If turn count is divisible by `auto_save_turns`, save.
 10. **Present narrative** — Describe what happened and the current state of the scene. End with an implicit prompt for the next action.
 
@@ -24,10 +24,10 @@ Each player turn follows this sequence:
 ## Void Corruption Advancement
 
 At the end of every player turn:
-1. Read current Void Corruption from `world_state.md`
+1. Read current Void Corruption from `world_state.json`
 2. Read Corruption Rate (base 1.0, modified by difficulty and events)
 3. Add the rate to current corruption: `new_corruption = current + rate`
-4. Write new value to `world_state.md`
+4. Write new value to `world_state.json`
 5. Check thresholds:
 
 | Threshold Crossed | Narrative Event |
@@ -101,7 +101,7 @@ If the dice tool is unavailable, simulate random rolls using your best judgment,
 
 **Player Attack Damage:**
 - Weapon attack: weapon dice + STR modifier (Battlemage), or INT modifier (Arcanist staff), or AGI modifier (Shadowweave daggers)
-- Spell/ability: see ability description in player.md
+- Spell/ability: see ability description in player.json
 
 **Enemy Attack Damage (by tier):**
 | Enemy Tier | Base Damage | Example |
@@ -210,11 +210,11 @@ When the player reaches and takes a Shard:
 
 1. Narrate the collection — describe the Shard's appearance, the sensation of attunement, the surge of the Worldstone's power entering the player's body.
 
-2. Update `session/player.md`:
+2. Update `session/player.json`:
    - Check the Shard as collected
    - Add the Shard's ability to the Active Abilities section
 
-3. Update `session/world_state.md`:
+3. Update `session/world_state.json`:
    - Mark Shard as Collected
    - Increment Malachar's Awareness by 1 tier
    - Restore player Rift Points: +3 (Shard energy restores gate-magic)
@@ -223,7 +223,7 @@ When the player reaches and takes a Shard:
 
 5. Trigger a Malachar vision if this is the 2nd or 4th Shard collected.
 
-6. Update `session/quests.md` — mark the relevant Shard quest as complete.
+6. Update `session/quests.json` — mark the relevant Shard quest as complete.
 
 **The Five Shard Abilities:**
 | Shard | Ability | Effect |
@@ -240,7 +240,7 @@ When the player reaches and takes a Shard:
 
 If a companion reaches 0 HP:
 - **If `companion_permadeath` is false (default):** Companion is incapacitated. They cannot act in combat. After combat, they recover with 10 HP. They are functional again next scene.
-- **If `companion_permadeath` is true:** Companion is dead. Remove from `companions.md`. Narrate their death with weight — this is a significant loss. Malachar's Awareness increases by 1 tier (he claims another).
+- **If `companion_permadeath` is true:** Companion is dead. Remove from `companions.json`. Narrate their death with weight — this is a significant loss. Malachar's Awareness increases by 1 tier (he claims another).
 
 ---
 
@@ -266,8 +266,8 @@ If player HP reaches 0:
 ## NPC Quests and Rewards
 
 When the player completes a quest:
-1. Update `session/quests.md` — move to Completed
-2. Update `session/npcs.md` — increment disposition by +1 tier (up to `devoted`)
+1. Update `session/quests.json` — move to Completed
+2. Update `session/npcs.json` — increment disposition by +1 tier (up to `devoted`)
 3. Grant rewards:
    - Gold (amount specified in quest definition)
    - Items (add to inventory)
@@ -281,8 +281,8 @@ When the player completes a quest:
 ## Malachar Visions
 
 Malachar appears as visions at specific trigger points (defined in `game/npcs.md`). When a vision triggers:
-1. Note the vision in `session/malachar_visions.md` (create file if it doesn't exist)
-2. Update Malachar's Awareness in `world_state.md` if appropriate
+1. Note the vision in `session/malachar_visions.json` (create file if it doesn't exist)
+2. Update Malachar's Awareness in `world_state.json` if appropriate
 3. Present the vision with a distinct visual style — use italics and a brief stage-direction note:
 
 ```
@@ -320,7 +320,7 @@ Based on `narrative.verbosity`:
 
 ### Consistency
 - Always reference existing session state when narrating. If the player has companion Korg, mention his presence in scenes.
-- Track NPC moods as defined in `session/npcs.md`. A hostile NPC does not suddenly become warm.
+- Track NPC moods as defined in `session/npcs.json`. A hostile NPC does not suddenly become warm.
 - The Void's visible presence should scale with Void Corruption % — barely visible at 10%, omnipresent and terrifying at 80%.
 
 ---

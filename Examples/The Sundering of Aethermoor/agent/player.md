@@ -18,7 +18,7 @@ The player can take the following types of actions. Accept natural language vari
 - Movement within a Realm is free (no Rift Point cost)
 - Rift travel between Realms costs exactly 1 Rift Point, deducted immediately
 - If player attempts Rift travel with 0 Rift Points: narrate the failure (gate flickers and dies), do not deduct, advise they need to restore Rift Points first
-- Update `session/location.md` after every movement
+- Update `session/location.json` after every movement
 
 ### Examination
 - `look/examine/inspect [object/area/person]` — describe the target in detail

@@ -70,7 +70,7 @@ Update `settings/custom.json`:
 ## Step 3: Character Creation
 
 ### 3a: Name
-Ask for the player's chosen name. Store as `Name` in player.md.
+Ask for the player's chosen name. Store as `Name` in player.json.
 
 ### 3b: Alias
 Ask for a street handle / alias:
@@ -78,7 +78,7 @@ Ask for a street handle / alias:
 > Every drifter needs a name the street knows. What do they call you?
 > 每个漂泊者都需要一个街头知道的名字。他们怎么称呼你？
 
-Store as `Alias` in player.md.
+Store as `Alias` in player.json.
 
 ### 3c: Background
 
@@ -131,127 +131,130 @@ Update `settings/custom.json` → `difficulty.mode` to match choice.
 
 Create all files in `session/` with initial state:
 
-### `session/player.md`
-```markdown
-# Player Status / 玩家状态
-
-**Name:** [chosen name]
-**Alias:** [chosen alias]
-**Background:** [chosen background]
-
-**Integrity:** [max from difficulty] / [max from difficulty]
-**Credits:** 50
-
-**Neural Implant:** Active
-**Current Disguise:** None
-
-**Turn:** 1
-**Time:** Morning / 晨
-
-## Status Effects / 状态效果
-- Signal Sensitivity (faint)
+### `session/player.json`
+```json
+{
+  "title": "Player Status / 玩家状态",
+  "name": "[chosen name]",
+  "alias": "[chosen alias]",
+  "background": "[chosen background]",
+  "integrity": { "current": "[max from difficulty]", "max": "[max from difficulty]" },
+  "credits": 50,
+  "neural_implant": "Active",
+  "current_disguise": "None",
+  "turn": 1,
+  "time": "Morning / 晨",
+  "status_effects": ["Signal Sensitivity (faint)"]
+}
 ```
 
-### `session/knowledge.md`
-```markdown
-# Knowledge Database / 知识库
-
-## Facts / 事实
-(none yet)
-
-## Rumors / 传闻
-[Insert starting rumors based on background, with IDs RUMOR-001 and RUMOR-002]
-
-## Evidence / 证据
-(none yet)
-
-## Theories / 推论
-(none yet)
-
-## Connections / 关联
-(none yet)
+### `session/knowledge.json`
+```json
+{
+  "title": "Knowledge Database / 知识库",
+  "facts": [],
+  "rumors": ["[Insert starting rumors based on background, with IDs RUMOR-001 and RUMOR-002]"],
+  "evidence": [],
+  "theories": [],
+  "connections": []
+}
 ```
 
-### `session/traces.md`
-```markdown
-# Traces of Truth / 真相痕迹
-
-**Total Discovered: 0 / 16**
-
-## Layer 1: The Surface / 表层 (0/3)
-- ○ TRACE-L1-01: [???]
-- ○ TRACE-L1-02: [???]
-- ○ TRACE-L1-03: [???]
-
-## Layer 2: The Conspiracy / 阴谋 (0/4)
-- ○ TRACE-L2-01: [???]
-- ○ TRACE-L2-02: [???]
-- ○ TRACE-L2-03: [???]
-- ○ TRACE-L2-04: [???]
-
-## Layer 3: The Severance Truth / 断离真相 (0/4)
-- ○ TRACE-L3-01: [???]
-- ○ TRACE-L3-02: [???]
-- ○ TRACE-L3-03: [???]
-- ○ TRACE-L3-04: [???]
-
-## Layer 4: The Mirror / 镜像 (0/3)
-- ○ TRACE-L4-01: [???]
-- ○ TRACE-L4-02: [???]
-- ○ TRACE-L4-03: [???]
-
-## Layer 5: The Full Truth / 完整真相 (0/2)
-- ○ TRACE-L5-01: [???]
-- ○ TRACE-L5-02: [???]
+### `session/traces.json`
+```json
+{
+  "title": "Traces of Truth / 真相痕迹",
+  "total_discovered": "0 / 16",
+  "layers": {
+    "layer_1_surface": {
+      "name": "The Surface / 表层",
+      "progress": "0/3",
+      "traces": {
+        "TRACE-L1-01": { "status": "undiscovered", "description": "[???]" },
+        "TRACE-L1-02": { "status": "undiscovered", "description": "[???]" },
+        "TRACE-L1-03": { "status": "undiscovered", "description": "[???]" }
+      }
+    },
+    "layer_2_conspiracy": {
+      "name": "The Conspiracy / 阴谋",
+      "progress": "0/4",
+      "traces": {
+        "TRACE-L2-01": { "status": "undiscovered", "description": "[???]" },
+        "TRACE-L2-02": { "status": "undiscovered", "description": "[???]" },
+        "TRACE-L2-03": { "status": "undiscovered", "description": "[???]" },
+        "TRACE-L2-04": { "status": "undiscovered", "description": "[???]" }
+      }
+    },
+    "layer_3_severance_truth": {
+      "name": "The Severance Truth / 断离真相",
+      "progress": "0/4",
+      "traces": {
+        "TRACE-L3-01": { "status": "undiscovered", "description": "[???]" },
+        "TRACE-L3-02": { "status": "undiscovered", "description": "[???]" },
+        "TRACE-L3-03": { "status": "undiscovered", "description": "[???]" },
+        "TRACE-L3-04": { "status": "undiscovered", "description": "[???]" }
+      }
+    },
+    "layer_4_mirror": {
+      "name": "The Mirror / 镜像",
+      "progress": "0/3",
+      "traces": {
+        "TRACE-L4-01": { "status": "undiscovered", "description": "[???]" },
+        "TRACE-L4-02": { "status": "undiscovered", "description": "[???]" },
+        "TRACE-L4-03": { "status": "undiscovered", "description": "[???]" }
+      }
+    },
+    "layer_5_full_truth": {
+      "name": "The Full Truth / 完整真相",
+      "progress": "0/2",
+      "traces": {
+        "TRACE-L5-01": { "status": "undiscovered", "description": "[???]" },
+        "TRACE-L5-02": { "status": "undiscovered", "description": "[???]" }
+      }
+    }
+  }
+}
 ```
 
-### `session/location.md`
-```markdown
-# Current Location / 当前位置
-
-**District:** The Sprawl / 蔓城
-**Area:** Rain Alley (near Mira's Noodle Shop) / 雨巷（米拉面馆附近）
-**Zone:** Street Level
-
-## Description
-A narrow alley between crumbling residential blocks. Neon signs for noodle shops and repair stalls cast colored light across wet concrete. The air smells of synthetic broth and ozone. Foot traffic is moderate — workers, drifters, the occasional street vendor. The hum of the city is constant.
-
-## Signal Strength: 10%
-## Danger Level: Safe
-## NEXUS Patrol: None
-
-## Exits
-- **North**: Main street — busier, more vendors, a public terminal
-- **South**: Deeper alleys — darker, quieter, leads to residential blocks
-- **East**: Mira's Noodle Shop — warm light, a woman watching from the counter
-- **West**: Market square — open area, more people, more noise
-
-## Points of Interest
-- Mira's Noodle Shop (east) — A small, steamy establishment. The owner seems to be watching you.
-- Public Terminal (north, main street) — NEXUS-operated information kiosk. Free access.
-- Repair Stall (north) — Sells basic tools and electronics.
-
-## NPCs Present
-- **Mira (米拉)** — Behind the counter of her noodle shop. Watching.
-- Various unnamed pedestrians.
+### `session/location.json`
+```json
+{
+  "title": "Current Location / 当前位置",
+  "district": "The Sprawl / 蔓城",
+  "area": "Rain Alley (near Mira's Noodle Shop) / 雨巷（米拉面馆附近）",
+  "zone": "Street Level",
+  "description": "A narrow alley between crumbling residential blocks. Neon signs for noodle shops and repair stalls cast colored light across wet concrete. The air smells of synthetic broth and ozone. Foot traffic is moderate — workers, drifters, the occasional street vendor. The hum of the city is constant.",
+  "signal_strength": "10%",
+  "danger_level": "Safe",
+  "nexus_patrol": "None",
+  "exits": {
+    "north": "Main street — busier, more vendors, a public terminal",
+    "south": "Deeper alleys — darker, quieter, leads to residential blocks",
+    "east": "Mira's Noodle Shop — warm light, a woman watching from the counter",
+    "west": "Market square — open area, more people, more noise"
+  },
+  "points_of_interest": [
+    "Mira's Noodle Shop (east) — A small, steamy establishment. The owner seems to be watching you.",
+    "Public Terminal (north, main street) — NEXUS-operated information kiosk. Free access.",
+    "Repair Stall (north) — Sells basic tools and electronics."
+  ],
+  "npcs_present": [
+    "Mira (米拉) — Behind the counter of her noodle shop. Watching.",
+    "Various unnamed pedestrians."
+  ]
+}
 ```
 
-### `session/inventory.md`
-```markdown
-# Inventory / 物品栏
-
-**Credits:** 50
-**Slots:** 1 / 6
-
-## Items
-| Slot | Item | Type | Description |
-|------|------|------|-------------|
-| 1 | [starting item based on background] | [type] | [description] |
-| 2 | — | — | — |
-| 3 | — | — | — |
-| 4 | — | — | — |
-| 5 | — | — | — |
-| 6 | — | — | — |
+### `session/inventory.json`
+```json
+{
+  "title": "Inventory / 物品栏",
+  "credits": 50,
+  "slots": { "used": 1, "max": 6 },
+  "items": [
+    { "slot": 1, "item": "[starting item based on background]", "type": "[type]", "description": "[description]" }
+  ]
+}
 ```
 
 Starting items:
@@ -259,51 +262,59 @@ Starting items:
 - Corporate Exile: `Expired NEXUS Keycard` / keycard / "Level 2 clearance, expired 3 years ago. Might still open some doors in Sector 7."
 - Netrunner: `Basic Cipher Toolkit` / data_chip / "A data chip loaded with decryption utilities. Old but functional."
 
-### `session/npcs.md`
-```markdown
-# Encountered NPCs / 已遇NPC
-
-(No NPCs encountered yet. Updated as player meets characters.)
-
-## Format
-| Name | Faction | Trust | Location Last Seen | Knowledge Revealed | Quest Status | Notes |
-|------|---------|-------|-------------------|-------------------|--------------|-------|
+### `session/npcs.json`
+```json
+{
+  "title": "Encountered NPCs / 已遇NPC",
+  "npcs": []
+}
+```
+NPC entries follow this format when added:
+```json
+{ "name": "", "faction": "", "trust": "", "location_last_seen": "", "knowledge_revealed": "", "quest_status": "", "notes": "" }
 ```
 
-### `session/world_state.md`
-```markdown
-# World State / 世界状态
+### `session/world_state.json`
 
-**NEXUS Alert:** 0%
-**Fragment Decay:** 0%
+**Important:** The `district_access` array must only contain districts the player currently knows about. Undiscovered districts and their unlock conditions are stored in the hidden `_district_registry` object. When the player discovers a new district through gameplay (an NPC mentions it, they find a clue, etc.), move it from `_district_registry.undiscovered` to `district_access` — but never include the `unlock` field in the visible entry.
 
-## District Access / 区域通行
-| District | Status |
-|----------|--------|
-| The Sprawl / 蔓城 | Open |
-| Neon Row / 霓虹街 | Open |
-| Sector 7 / 第七区 | Restricted |
-| The Undercroft / 底渊 | Open (dangerous) |
-| Chrome Heights / 镀金台 | Restricted |
-| The Resonance / 共鸣所 | Hidden |
-
-## Time
-**Day:** 1
-**Period:** Morning / 晨
-
-## Global Events / 全局事件
-(none yet)
-
-## Ending Trajectory
-(neutral — no direction yet)
+```json
+{
+  "title": "World State / 世界状态",
+  "nexus_alert": "0%",
+  "fragment_decay": "0%",
+  "district_access": [
+    {"name": "The Sprawl", "name_zh": "蔓城", "status": "Open", "notes": "起始区域"},
+    {"name": "Neon Row", "name_zh": "霓虹街", "status": "Open", "notes": "娱乐与情报区"}
+  ],
+  "_district_registry": {
+    "hidden": true,
+    "undiscovered": [
+      {"name": "The Undercroft", "name_zh": "底渊", "status": "Locked", "unlock": "Requires TRACE-L1-03", "notes": "Underground Listener territory"},
+      {"name": "Sector 7", "name_zh": "第七区", "status": "Restricted", "unlock": "Requires keycard or disguise", "notes": "Corporate zone. NEXUS offices, research labs."},
+      {"name": "Chrome Heights", "name_zh": "镀金台", "status": "Restricted", "unlock": "Requires invitation or disguise", "notes": "Elite residential area."},
+      {"name": "The Resonance", "name_zh": "共鸣所", "status": "Hidden", "unlock": "Requires Layer 3 completion", "notes": "Ancient pre-Severance facility."}
+    ]
+  },
+  "time": { "day": 1, "period": "Morning / 晨" },
+  "global_events": [],
+  "_ending_trajectory": { "hidden": true, "value": "neutral — no direction yet" }
+}
 ```
 
-### `session/log.md`
-```markdown
-# Session Log / 会话日志
-
-## [Turn 1] — Awakening / 苏醒
-You wake in a rain-soaked alley in The Sprawl with no memory and a humming neural implant. A noodle vendor watches from across the alley. The towers of NEXUS loom in the distance. [signal]
+### `session/log.json`
+```json
+{
+  "title": "Session Log / 会話日志",
+  "entries": [
+    {
+      "turn": 1,
+      "title": "Awakening / 苏醒",
+      "description": "You wake in a rain-soaked alley in The Sprawl with no memory and a humming neural implant. A noodle vendor watches from across the alley. The towers of NEXUS loom in the distance.",
+      "signal": true
+    }
+  ]
+}
 ```
 
 ---

@@ -67,7 +67,7 @@ When the player invokes `LOAD GAME.md`:
 1. Read all files in `agent/` and `game/`.
 2. Read `settings/custom.json`.
 3. List available saves under `saves/`:
-   - For each save, read `session/player.md` and `session/world_state.md` to show preview:
+   - For each save, read `session/player.json` and `session/world_state.json` to show preview:
      ```
      [save_name] — Alias: [alias], District: [district], Turn: [n], NEXUS Alert: [x]%, Traces: [n]/16
      ```
@@ -84,7 +84,7 @@ When the player invokes `LOAD GAME.md`:
 When the player invokes `SAVE GAME.md`:
 
 1. Verify `session/` exists and contains valid state files.
-2. Determine save name (from the name chosen during NEW GAME, stored in `session/player.md` or use a default).
+2. Determine save name (from the name chosen during NEW GAME, stored in `session/player.json` or use a default).
 3. Copy the entire `session/` folder into `saves/<save_name>/`.
 4. Confirm the save to the player with details:
    ```
@@ -103,7 +103,7 @@ When the player invokes `RESUME.md`:
 
 1. Read all files in `agent/` and `game/`.
 2. Read `settings/custom.json`.
-3. Verify `session/` exists and contains at minimum `player.md`. If not, direct the player to `NEW GAME.md` or `LOAD GAME.md`.
+3. Verify `session/` exists and contains at minimum `player.json`. If not, direct the player to `NEW GAME.md` or `LOAD GAME.md`.
 4. Read ALL files in `session/` to fully restore game state.
 5. Present a brief status recap:
    ```
@@ -111,7 +111,7 @@ When the player invokes `RESUME.md`:
    Integrity: [x]/[max] | NEXUS Alert: [x]% | Fragment Decay: [x]%
    Traces: [n]/16 | Knowledge: [n] facts, [n] rumors, [n] evidence
    ```
-6. Present the current scene from `session/location.md`.
+6. Present the current scene from `session/location.json`.
 7. Resume the game session (follow `agent/game.md`).
 
 ---
@@ -128,10 +128,10 @@ Perform these checks when loading or resuming a session:
    - Inventory slots: ≤ max_inventory_slots
    - Turn count: ≥ 1
 3. **Consistency**:
-   - Player's current district matches `location.md` district
-   - NPCs in `location.md` should exist in `npcs.md` or `game/npcs.md`
-   - Evidence items in `knowledge.md` with physical form should exist in `inventory.md`
-   - Traces in `traces.md` should be consistent with knowledge items
+   - Player's current district matches `location.json` district
+   - NPCs in `location.json` should exist in `npcs.json` or `game/npcs.md`
+   - Evidence items in `knowledge.json` with physical form should exist in `inventory.json`
+   - Traces in `traces.json` should be consistent with knowledge items
 4. **Dead state detection**: If Integrity = 0, the player is dead. Present the death scene and ending.
 
 ---
@@ -141,7 +141,7 @@ Perform these checks when loading or resuming a session:
 This is the core system that makes Signal Lost unique. The agent must check player knowledge before revealing new content.
 
 ### How It Works
-1. Before presenting new dialogue options, locations, or plot developments, check `session/traces.md` and `session/knowledge.md`.
+1. Before presenting new dialogue options, locations, or plot developments, check `session/traces.json` and `session/knowledge.json`.
 2. **Trace gates**: Certain content requires specific traces to be discovered:
    - Listener contacts: requires TRACE-L2-01 or TRACE-L2-02
    - Undercroft deep areas: requires TRACE-L2-03
@@ -158,6 +158,7 @@ The agent must NEVER:
 - Reference events that haven't happened
 - Suggest the player "should investigate X"
 - Break immersion by referencing the game structure
+- Allow session files to reveal undiscovered content (districts, NPCs, items, or unlock requirements the player hasn't learned about yet). The TUI and all player-visible state are part of the game world — if the player shouldn't know it, it must not appear in any visible session data.
 
 The hint system (from difficulty settings) controls how much the agent can nudge:
 - **none**: Zero hints. The player must figure everything out.
