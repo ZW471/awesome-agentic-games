@@ -495,6 +495,7 @@ An **append-only** [JSON Lines](https://jsonlines.org/) file that records every 
 - Never modify, delete, or rewrite existing lines (append-only)
 - Created as an empty file during initialization
 - Included in save/load operations alongside all other session files
+- **CRITICAL — JSONL format:** Each entry MUST be a single line of JSON. The `content` field often contains multi-paragraph narrative text. All newlines within `content` MUST be encoded as the two-character escape sequence `\n` (backslash + n), never as actual newline characters. A file with literal newlines inside JSON strings is broken and cannot be parsed. Before appending, verify that your JSON serialization produces a single line with no raw newlines in the content string.
 
 ---
 
