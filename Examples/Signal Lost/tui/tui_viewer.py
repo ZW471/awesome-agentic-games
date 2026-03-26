@@ -1125,9 +1125,10 @@ class SessionParser:
             else:
                 pois.append(str(p))
 
-        # Format NPCs as strings
+        # Format NPCs — support both "npcs_present" and "npcs_here" keys
         npcs = []
-        for n in raw.get("npcs_present", []):
+        npc_list = raw.get("npcs_present", raw.get("npcs_here", []))
+        for n in npc_list:
             if isinstance(n, dict):
                 name = n.get("name_zh", n.get("name", ""))
                 ename = n.get("name", "")
@@ -1142,12 +1143,17 @@ class SessionParser:
         area = raw.get("area", "")
         area_zh = raw.get("area_zh", "")
 
+        # Fall back to top-level keys when "environment" sub-object is absent
+        signal = env.get("signal_strength", raw.get("signal_strength", 0))
+        danger = env.get("danger_level", raw.get("danger_level", "Safe"))
+        patrol = env.get("nexus_patrol", raw.get("nexus_patrol", "None"))
+
         return {
             "district": f"{district_zh}（{district}）" if district_zh else district,
             "area": f"{area_zh}（{area}）" if area_zh else area,
-            "signal_strength": env.get("signal_strength", 0),
-            "danger_level": env.get("danger_level", "Safe"),
-            "nexus_patrol": env.get("nexus_patrol", "None"),
+            "signal_strength": signal,
+            "danger_level": danger,
+            "nexus_patrol": patrol,
             "exits": exits,
             "pois": pois,
             "npcs": npcs,

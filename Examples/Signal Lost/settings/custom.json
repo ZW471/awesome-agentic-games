@@ -7,7 +7,10 @@
   "language": {
     "display": "zh",
     "tui": "zh",
-    "options": ["zh", "en"]
+    "options": [
+      "zh",
+      "en"
+    ]
   },
   "difficulty": {
     "mode": "standard",
@@ -48,11 +51,23 @@
   },
   "narrative": {
     "verbosity": "standard",
-    "verbosity_options": ["terse", "standard", "immersive"],
+    "verbosity_options": [
+      "terse",
+      "standard",
+      "immersive"
+    ],
     "tone": "noir",
-    "tone_options": ["noir", "clinical", "poetic"],
+    "tone_options": [
+      "noir",
+      "clinical",
+      "poetic"
+    ],
     "death_description": "moderate",
-    "death_description_options": ["fade_to_black", "moderate", "graphic"],
+    "death_description_options": [
+      "fade_to_black",
+      "moderate",
+      "graphic"
+    ],
     "signal_manifestations": true
   },
   "gameplay": {

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from typing import Literal
 
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
@@ -102,12 +103,25 @@ def input_gate(state: GameState) -> dict:
 # The single LLM node. Calls the model with tools bound.
 # ---------------------------------------------------------------------------
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove <think>...</think> blocks from local-model output."""
+    return _THINK_RE.sub("", text).strip()
+
+
 def resolver(state: GameState) -> dict:
     """Call the LLM to process the player's action."""
     llm = get_llm()
     llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
     response = llm_with_tools.invoke(state["messages"])
+
+    # Strip thinking tags from local models (e.g. Qwen)
+    if isinstance(response.content, str) and "<think>" in response.content:
+        response.content = _strip_thinking(response.content)
+
     return {"messages": [response]}
 
 

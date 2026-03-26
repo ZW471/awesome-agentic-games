@@ -226,6 +226,55 @@ def build_npc_context(npcs: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Knowledge context builder (actual entries, not just counts)
+# ---------------------------------------------------------------------------
+
+def build_knowledge_context(knowledge: dict) -> str:
+    """Build knowledge context with actual entries so the LLM knows what the player has discovered."""
+    sections = ["## Player Knowledge"]
+
+    for category, key, desc_fields in [
+        ("Facts", "facts", ("description",)),
+        ("Rumors", "rumors", ("description",)),
+        ("Evidence", "evidence", ("name", "description")),
+        ("Theories", "theories", ("statement",)),
+        ("Connections", "connections", ("relationship",)),
+    ]:
+        entries = knowledge.get(key, [])
+        if not entries:
+            continue
+        sections.append(f"### {category}")
+        for e in entries:
+            entry_id = e.get("id", "")
+            # Build description from available fields
+            parts = []
+            for field in desc_fields:
+                val = e.get(field, "")
+                if val:
+                    parts.append(val)
+            desc = " — ".join(parts) if parts else "?"
+
+            source = e.get("source", e.get("found", e.get("based_on", "")))
+            if isinstance(source, list):
+                source = ", ".join(str(s) for s in source)
+
+            line = f"- [{entry_id}] {desc}" if entry_id else f"- {desc}"
+            if source:
+                line += f" (source: {source})"
+
+            # Show rumor status if present
+            status = e.get("status", "")
+            if status:
+                line += f" [{status}]"
+
+            sections.append(line)
+
+    if len(sections) <= 1:
+        return ""
+    return "\n".join(sections)
+
+
+# ---------------------------------------------------------------------------
 # Full prompt assembly
 # ---------------------------------------------------------------------------
 
@@ -249,6 +298,7 @@ def build_full_prompt(state: dict, language: str = "en") -> str:
         SYSTEM_PROMPT.format(language=language),
         build_background_prompt(deepest_layer),
         build_state_summary(state),
+        build_knowledge_context(state.get("knowledge", {})),
         build_npc_context(state.get("npcs", {})),
     ]
 

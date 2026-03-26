@@ -65,10 +65,18 @@ def _load_provider_config() -> dict:
         return {}
 
 
-def _save_provider_config(provider: str, model: str) -> None:
+def _save_provider_config(provider: str, model: str, **extra) -> None:
     os.makedirs(os.path.dirname(PROVIDER_CONFIG_PATH), exist_ok=True)
+    try:
+        with open(PROVIDER_CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        cfg = {}
+    cfg["provider"] = provider
+    cfg["model"] = model
+    cfg.update(extra)
     with open(PROVIDER_CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump({"provider": provider, "model": model}, f, indent=2)
+        json.dump(cfg, f, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -78,12 +86,17 @@ def _save_provider_config(provider: str, model: str) -> None:
 DEFAULT_MODELS = {
     "openai": "gpt-5.4",
     "anthropic": "claude-sonnet-4-20250514",
+    "lmstudio": "local-model",
 }
 
 ENV_KEY_NAMES = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    "lmstudio": "",
 }
+
+# Providers that run locally and don't require an API key
+LOCAL_PROVIDERS = {"lmstudio"}
 
 
 # =============================================================================
@@ -99,6 +112,8 @@ class _ProviderReadyMixin:
         model = cfg.get("model")
         if not provider or not model:
             return False
+        if provider in LOCAL_PROVIDERS:
+            return True
         env_key_name = ENV_KEY_NAMES.get(provider, "")
         if not env_key_name:
             return False
@@ -320,6 +335,7 @@ class SettingsScreen(Screen):
         current_provider = provider_cfg.get("provider", "openai")
         current_model = provider_cfg.get("model", DEFAULT_MODELS.get(current_provider, ""))
         current_temp = str(provider_cfg.get("temperature", 0.7))
+        current_base_url = provider_cfg.get("base_url", "http://localhost:1234/v1")
 
         env = _load_env(ENV_PATH)
         env_key_name = ENV_KEY_NAMES.get(current_provider, "")
@@ -344,6 +360,7 @@ class SettingsScreen(Screen):
                     [
                         ("OpenAI", "openai"),
                         ("Anthropic", "anthropic"),
+                        ("LM Studio (Local)", "lmstudio"),
                     ],
                     value=current_provider,
                     id="settings-provider",
@@ -351,6 +368,9 @@ class SettingsScreen(Screen):
 
                 yield Label("Model", classes="settings-label")
                 yield Input(value=current_model, placeholder="Model name", id="settings-model")
+
+                yield Label("Base URL", classes="settings-label", id="settings-label-base-url")
+                yield Input(value=current_base_url, placeholder="http://localhost:1234/v1", id="settings-base-url")
 
                 yield Label("API Key", classes="settings-label", id="settings-label-api-key")
                 yield Static("(loaded from .env)", classes="settings-hint", id="settings-api-key-hint")
@@ -371,19 +391,36 @@ class SettingsScreen(Screen):
     def _update_key_visibility(self) -> None:
         try:
             provider = self.query_one("#settings-provider", Select).value
+            is_local = provider in LOCAL_PROVIDERS
             env_key_name = ENV_KEY_NAMES.get(provider, "")
             env = _load_env(ENV_PATH)
             has_key = bool(env.get(env_key_name, "") or os.environ.get(env_key_name, ""))
 
             key_input = self.query_one("#settings-api-key", Input)
             hint = self.query_one("#settings-api-key-hint", Static)
-            if has_key:
+            label = self.query_one("#settings-label-api-key", Label)
+            base_url_input = self.query_one("#settings-base-url", Input)
+            base_url_label = self.query_one("#settings-label-base-url", Label)
+
+            # Base URL only shown for local providers
+            base_url_input.display = is_local
+            base_url_label.display = is_local
+
+            if is_local:
+                label.display = False
                 key_input.display = False
                 hint.display = True
-                hint.update("(loaded from .env)")
+                hint.update("(no API key needed — local server)")
             else:
+                label.display = True
                 key_input.display = True
-                hint.display = False
+                if has_key:
+                    key_input.placeholder = "Enter new key to replace existing one"
+                    hint.display = True
+                    hint.update("(key loaded from .env — enter new key to replace)")
+                else:
+                    key_input.placeholder = "Paste your API key"
+                    hint.display = False
         except Exception:
             pass
 
@@ -391,7 +428,11 @@ class SettingsScreen(Screen):
         if event.select.id == "settings-provider":
             provider = event.value
             model_input = self.query_one("#settings-model", Input)
-            model_input.value = DEFAULT_MODELS.get(provider, "")
+            cfg = _load_provider_config()
+            if cfg.get("provider") == provider and cfg.get("model"):
+                model_input.value = cfg["model"]
+            else:
+                model_input.value = DEFAULT_MODELS.get(provider, "")
             self._update_key_visibility()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -405,6 +446,7 @@ class SettingsScreen(Screen):
         provider = self.query_one("#settings-provider", Select).value
         model = self.query_one("#settings-model", Input).value.strip()
         api_key = self.query_one("#settings-api-key", Input).value.strip()
+        base_url = self.query_one("#settings-base-url", Input).value.strip()
         temperature_str = self.query_one("#settings-temperature", Input).value.strip()
 
         if not model:
@@ -417,6 +459,40 @@ class SettingsScreen(Screen):
             self.notify("Invalid temperature value.", severity="error", timeout=3)
             return
 
+        # Resolve the API key to use for testing
+        if provider not in LOCAL_PROVIDERS:
+            env_key_name = ENV_KEY_NAMES.get(provider, "")
+            env = _load_env(ENV_PATH)
+            effective_key = api_key or env.get(env_key_name, "") or os.environ.get(env_key_name, "")
+            if not effective_key:
+                self.notify("API key is required.", severity="error", timeout=3)
+                return
+            # Temporarily set key so the LLM client can use it
+            os.environ[env_key_name] = effective_key
+
+        # Test connection before saving
+        self.notify("Testing connection...", severity="information", timeout=2)
+        self.run_worker(self._test_and_save(
+            language, provider, model, api_key, base_url, temperature,
+        ), exclusive=True)
+
+    async def _test_and_save(
+        self, language: str, provider: str, model: str,
+        api_key: str, base_url: str, temperature: float,
+    ) -> None:
+        from run import test_llm_connection
+        import asyncio
+        loop = asyncio.get_event_loop()
+        test_kwargs = {"temperature": temperature}
+        if provider in LOCAL_PROVIDERS and base_url:
+            test_kwargs["base_url"] = base_url
+        success, error = await loop.run_in_executor(
+            None, lambda: test_llm_connection(provider, model, **test_kwargs),
+        )
+        if not success:
+            self.notify(f"Connection failed: {error}", severity="error", timeout=6)
+            return
+
         # Save language to custom.json
         custom = _load_custom_settings()
         if "language" not in custom:
@@ -425,8 +501,11 @@ class SettingsScreen(Screen):
         custom["language"]["tui"] = language
         _save_custom_settings(custom)
 
-        # Save provider + model
-        _save_provider_config(provider, model)
+        # Save provider + model + base_url
+        extra = {}
+        if provider in LOCAL_PROVIDERS and base_url:
+            extra["base_url"] = base_url
+        _save_provider_config(provider, model, **extra)
 
         # Save temperature to provider config
         try:
@@ -439,12 +518,12 @@ class SettingsScreen(Screen):
             json.dump(pcfg, f, indent=2)
 
         # Save API key if provided
-        if api_key:
+        if api_key and provider not in LOCAL_PROVIDERS:
             env_key_name = ENV_KEY_NAMES.get(provider, "")
             _save_env(ENV_PATH, env_key_name, api_key)
             os.environ[env_key_name] = api_key
 
-        self.notify("Settings saved!", severity="information", timeout=3)
+        self.notify("Connection OK — settings saved!", severity="information", timeout=3)
         self.app.pop_screen()
 
     def action_go_back(self) -> None:
@@ -670,8 +749,8 @@ class LoadGameScreen(_ProviderReadyMixin, Screen):
                 alias = player.get("alias", player.get("name", "???"))
                 bg = player.get("background", "?")
                 turn = player.get("turn", "?")
-                integrity = player.get("integrity", {})
-                int_str = f"{integrity.get('current', '?')}/{integrity.get('max', '?')}"
+                integrity = player.get("integrity", "?")
+                int_str = f"{integrity.get('current', '?')}/{integrity.get('max', '?')}" if isinstance(integrity, dict) else str(integrity)
                 alert = world.get("nexus_alert", {})
                 alert_val = alert.get("current", alert) if isinstance(alert, dict) else alert
                 total_traces = traces.get("total_discovered", "?")
@@ -778,6 +857,7 @@ class ProviderScreen(Screen):
         cfg = _load_provider_config()
         saved_provider = cfg.get("provider", "openai")
         saved_model = cfg.get("model", DEFAULT_MODELS.get(saved_provider, "gpt-5.4"))
+        saved_base_url = cfg.get("base_url", "http://localhost:1234/v1")
 
         env = _load_env(ENV_PATH)
         env_key_name = ENV_KEY_NAMES.get(saved_provider, "")
@@ -792,6 +872,7 @@ class ProviderScreen(Screen):
                     [
                         ("OpenAI", "openai"),
                         ("Anthropic", "anthropic"),
+                        ("LM Studio (Local)", "lmstudio"),
                     ],
                     value=saved_provider,
                     id="select-provider",
@@ -799,6 +880,9 @@ class ProviderScreen(Screen):
 
                 yield Label("Model", classes="prov-label")
                 yield Input(value=saved_model, placeholder="Model name", id="input-model")
+
+                yield Label("Base URL", classes="prov-label", id="label-base-url")
+                yield Input(value=saved_base_url, placeholder="http://localhost:1234/v1", id="input-base-url")
 
                 yield Label("API Key", classes="prov-label", id="label-api-key")
                 yield Static("(loaded from .env)", classes="prov-hint", id="api-key-hint")
@@ -819,6 +903,7 @@ class ProviderScreen(Screen):
 
     def _update_key_visibility(self) -> None:
         provider = self.query_one("#select-provider", Select).value
+        is_local = provider in LOCAL_PROVIDERS
         env_key_name = ENV_KEY_NAMES.get(provider, "")
         env = _load_env(ENV_PATH)
         has_key = bool(env.get(env_key_name, "") or os.environ.get(env_key_name, ""))
@@ -827,13 +912,28 @@ class ProviderScreen(Screen):
             key_input = self.query_one("#input-api-key", Input)
             hint = self.query_one("#api-key-hint", Static)
             label = self.query_one("#label-api-key", Label)
-            if has_key:
+            base_url_input = self.query_one("#input-base-url", Input)
+            base_url_label = self.query_one("#label-base-url", Label)
+
+            # Base URL only shown for local providers
+            base_url_input.display = is_local
+            base_url_label.display = is_local
+
+            if is_local:
                 key_input.display = False
+                label.display = False
                 hint.display = True
-                hint.update("(loaded from .env)")
+                hint.update("(no API key needed — local server)")
             else:
+                label.display = True
                 key_input.display = True
-                hint.display = False
+                if has_key:
+                    key_input.placeholder = "Enter new key to replace existing one"
+                    hint.display = True
+                    hint.update("(key loaded from .env — enter new key to replace)")
+                else:
+                    key_input.placeholder = "Paste your API key"
+                    hint.display = False
         except Exception:
             pass
 
@@ -841,7 +941,11 @@ class ProviderScreen(Screen):
         if event.select.id == "select-provider":
             provider = event.value
             model_input = self.query_one("#input-model", Input)
-            model_input.value = DEFAULT_MODELS.get(provider, "")
+            cfg = _load_provider_config()
+            if cfg.get("provider") == provider and cfg.get("model"):
+                model_input.value = cfg["model"]
+            else:
+                model_input.value = DEFAULT_MODELS.get(provider, "")
             self._update_key_visibility()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -854,6 +958,7 @@ class ProviderScreen(Screen):
         provider = self.query_one("#select-provider", Select).value
         model = self.query_one("#input-model", Input).value.strip()
         api_key = self.query_one("#input-api-key", Input).value.strip()
+        base_url = self.query_one("#input-base-url", Input).value.strip()
         temperature_str = self.query_one("#input-temperature", Input).value.strip()
 
         if not model:
@@ -866,23 +971,52 @@ class ProviderScreen(Screen):
             self.notify("Invalid temperature value.", severity="error", timeout=3)
             return
 
-        # Resolve API key
-        env_key_name = ENV_KEY_NAMES.get(provider, "")
-        env = _load_env(ENV_PATH)
-        existing_key = env.get(env_key_name, "") or os.environ.get(env_key_name, "")
+        # Resolve API key (not needed for local providers)
+        if provider not in LOCAL_PROVIDERS:
+            env_key_name = ENV_KEY_NAMES.get(provider, "")
+            env = _load_env(ENV_PATH)
+            effective_key = api_key or env.get(env_key_name, "") or os.environ.get(env_key_name, "")
 
-        if api_key:
-            # User provided a new key — save to .env
-            _save_env(ENV_PATH, env_key_name, api_key)
-            os.environ[env_key_name] = api_key
-        elif existing_key:
-            os.environ[env_key_name] = existing_key
-        else:
-            self.notify("API key is required. Paste it above or set it in .env.", severity="error", timeout=4)
+            if not effective_key:
+                self.notify("API key is required. Paste it above or set it in .env.", severity="error", timeout=4)
+                return
+            # Temporarily set key so the LLM client can use it
+            os.environ[env_key_name] = effective_key
+
+        # Test connection before launching
+        self.notify("Testing connection...", severity="information", timeout=2)
+        self.run_worker(self._test_and_launch(
+            provider, model, api_key, base_url, temperature,
+        ), exclusive=True)
+
+    async def _test_and_launch(
+        self, provider: str, model: str,
+        api_key: str, base_url: str, temperature: float,
+    ) -> None:
+        import asyncio
+        from run import test_llm_connection
+        loop = asyncio.get_event_loop()
+        test_kwargs = {"temperature": temperature}
+        if provider in LOCAL_PROVIDERS and base_url:
+            test_kwargs["base_url"] = base_url
+        success, error = await loop.run_in_executor(
+            None, lambda: test_llm_connection(provider, model, **test_kwargs),
+        )
+        if not success:
+            self.notify(f"Connection failed: {error}", severity="error", timeout=6)
             return
 
-        # Persist provider + model globally
-        _save_provider_config(provider, model)
+        # Save API key if user provided a new one
+        if api_key and provider not in LOCAL_PROVIDERS:
+            env_key_name = ENV_KEY_NAMES.get(provider, "")
+            _save_env(ENV_PATH, env_key_name, api_key)
+            os.environ[env_key_name] = api_key
+
+        # Persist provider + model + base_url globally
+        extra = {}
+        if provider in LOCAL_PROVIDERS and base_url:
+            extra["base_url"] = base_url
+        _save_provider_config(provider, model, **extra)
 
         # Delegate to the app
         self.app.launch_game(self.mode, provider, model, temperature)

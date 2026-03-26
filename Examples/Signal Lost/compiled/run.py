@@ -40,6 +40,16 @@ from tui.tui_viewer import GameScreen
 SETTINGS_DIR = os.path.join(GAME_ROOT, "settings")
 
 
+def test_llm_connection(provider: str, model: str, **kwargs) -> tuple[bool, str]:
+    """Test LLM connection with a dummy prompt. Returns (success, error_message)."""
+    try:
+        llm = create_llm(provider, model, **kwargs)
+        llm.invoke("hi")
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+
+
 def create_llm(provider: str, model: str, **kwargs):
     """Create an LLM instance based on provider."""
     if provider == "anthropic":
@@ -48,8 +58,12 @@ def create_llm(provider: str, model: str, **kwargs):
     elif provider == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model=model, **kwargs)
+    elif provider == "lmstudio":
+        from langchain_openai import ChatOpenAI
+        base_url = kwargs.pop("base_url", "http://localhost:1234/v1")
+        return ChatOpenAI(model=model, base_url=base_url, api_key="lm-studio", **kwargs)
     else:
-        raise ValueError(f"Unknown provider: {provider}. Use 'anthropic' or 'openai'.")
+        raise ValueError(f"Unknown provider: {provider}. Use 'anthropic', 'openai', or 'lmstudio'.")
 
 
 class SignalLostApp(App):
@@ -75,12 +89,23 @@ class SignalLostApp(App):
             if k not in os.environ:
                 os.environ[k] = v
 
+        # Enable LangSmith tracing only if API key is present
+        if os.environ.get("LANGSMITH_API_KEY"):
+            os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+            os.environ.setdefault("LANGCHAIN_PROJECT", "signal-lost")
+
         self.push_screen(StartScreen())
 
     def launch_game(self, mode: str, provider: str, model: str, temperature: float) -> None:
         """Called by ProviderScreen to set up the LLM and switch to the game."""
-        # Create LLM
-        llm = create_llm(provider, model, temperature=temperature)
+        # Create LLM — pass extra kwargs from provider config
+        extra = {}
+        if provider == "lmstudio":
+            from tui.screens import _load_provider_config
+            cfg = _load_provider_config()
+            if cfg.get("base_url"):
+                extra["base_url"] = cfg["base_url"]
+        llm = create_llm(provider, model, temperature=temperature, **extra)
         set_llm(llm)
 
         # Prepare session directory based on mode
@@ -105,6 +130,20 @@ class SignalLostApp(App):
         # Compile graph and load state
         app_graph = compile_graph()
         state = initial_state(DEFAULT_SESSION_DIR)
+
+        # Save graph visualization asynchronously
+        import asyncio
+
+        async def _save_graph_png():
+            try:
+                png_path = os.path.join(GAME_ROOT, "compiled", "graph.png")
+                data = await asyncio.to_thread(app_graph.get_graph().draw_mermaid_png)
+                with open(png_path, "wb") as f:
+                    f.write(data)
+            except Exception:
+                pass
+
+        asyncio.create_task(_save_graph_png())
 
         # Switch to game screen (replaces entire screen stack)
         self.switch_screen(GameScreen(
