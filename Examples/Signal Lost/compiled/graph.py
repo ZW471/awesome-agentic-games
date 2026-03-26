@@ -117,11 +117,13 @@ def input_gate(state: GameState) -> dict:
         "messages": old_sys_removals + old_conv_removals + [static_msg, dynamic_msg],
         "turn_delta": empty_turn_delta(),
         "narrative": "",
-        # Reset flags that may have been set by input_blocked_handler in the prior turn
+        # Reset per-turn flags carried over from the previous turn
         "input_blocked": False,
         "blocking_reason": None,
         "skip_conversation_log": False,
         "skip_turn_increment": False,
+        # NOTE: skip_validation is NOT reset here — it is set by the TUI BEFORE
+        # invoking the graph and must survive into input_validator this same turn.
     }
 
 
@@ -199,7 +201,15 @@ INVALID: <one-sentence reason>"""
 
 
 def input_validator(state: GameState) -> dict:
-    """Check player input for injection/cheating before it reaches the resolver."""
+    """Check player input for injection/cheating before it reaches the resolver.
+
+    Skipped entirely for system-event turns (resume, load recap, etc.) — those are
+    injected by the game engine, not typed by the player.
+    """
+    # System-event turns bypass all validation; reset the flag so it doesn't persist
+    if state.get("skip_validation", False):
+        return {"input_blocked": False, "blocking_reason": None, "skip_validation": False}
+
     messages = state["messages"]
 
     # Find the current HumanMessage (most recent)
@@ -574,14 +584,30 @@ def state_writer(state: GameState) -> dict:
         elif isinstance(msg, AIMessage) and msg.tool_calls:
             removals.append(RemoveMessage(id=msg.id))
 
-    # Keep a compact summary of what happened + the final narrative
+    # System-event turns (resume, load recap, etc.) are ephemeral — remove their
+    # HumanMessage and final AI response from graph state after display so they
+    # never appear in the 5-turn history window.
+    is_system_event = state.get("skip_conversation_log", False)
+    if is_system_event:
+        for msg in current_msgs:
+            if isinstance(msg, HumanMessage) and msg.id:
+                removals.append(RemoveMessage(id=msg.id))
+        # Also remove the recap AIMessage (the response to the system event)
+        for msg in reversed(current_msgs):
+            if isinstance(msg, AIMessage) and msg.content and not msg.tool_calls and msg.id:
+                removals.append(RemoveMessage(id=msg.id))
+                break
+
+    # Keep a compact summary of what happened + the final narrative.
+    # For system-event turns there is nothing to summarise — skip the tool recap injection.
     reduced_new: list = []
-    tool_summary = reduce_turn_messages(current_msgs)
-    # From the reduced set, only keep the SystemMessage summary (tool recap)
-    # The HumanMessage and final AIMessage are already in state from earlier nodes
-    for msg in tool_summary:
-        if isinstance(msg, SystemMessage) and "[Turn mechanics:" in str(msg.content):
-            reduced_new.append(msg)
+    if not is_system_event:
+        tool_summary = reduce_turn_messages(current_msgs)
+        # From the reduced set, only keep the SystemMessage summary (tool recap)
+        # The HumanMessage and final AIMessage are already in state from earlier nodes
+        for msg in tool_summary:
+            if isinstance(msg, SystemMessage) and "[Turn mechanics:" in str(msg.content):
+                reduced_new.append(msg)
 
     return {
         "player": player,

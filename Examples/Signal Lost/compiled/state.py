@@ -53,6 +53,11 @@ class GameState(TypedDict):
     input_blocked: bool          # Set True by input_validator when a player message is rejected
     blocking_reason: str | None  # Human-readable reason for rejection
 
+    # --- System event flag ---
+    skip_validation: bool        # If True, this turn is a system-injected event (resume/info),
+                                 # not player input — bypasses input_validator entirely and
+                                 # makes the turn ephemeral (messages removed from history)
+
 
 # ---------------------------------------------------------------------------
 # File I/O helpers
@@ -162,6 +167,7 @@ def initial_state(session_dir: str) -> GameState:
         skip_turn_increment=False,
         input_blocked=False,
         blocking_reason=None,
+        skip_validation=False,
     )
 
 

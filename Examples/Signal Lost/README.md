@@ -23,7 +23,7 @@ This is not a story about saving the world. This is a story about understanding 
 The TUI provides a split-screen experience: a live terminal on the left for interacting with your AI agent, and a tabbed dashboard on the right showing all game state.
 
 ```bash
-cd "Examples/Signal Lost"
+cd "Examples/Signal Lost/compiled"
 .venv/bin/python tui/tui_viewer.py .
 ```
 
@@ -36,7 +36,7 @@ TUI shortcuts: `r` refresh, `t` focus terminal, `1`-`9` switch tabs, `q` quit.
 
 ### With an AI Agent
 
-Tell your AI agent to read `NEW GAME.md` to start a new game. Compatible agents:
+Tell your AI agent to read `compiled/NEW GAME.md` to start a new game. Compatible agents:
 - Claude Code
 - Any agentic coding assistant that can read/write files
 

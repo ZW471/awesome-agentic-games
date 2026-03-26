@@ -202,13 +202,24 @@ class StreamingMessage(Static):
 
 
 class AgentResponse(Message):
-    """Message posted when the agent produces a response."""
+    """Message posted when the agent produces a response.
 
-    def __init__(self, content: str, game_over: bool = False, ending: str | None = None):
+    role: "assistant" for normal gameplay turns, "system" for system-event
+          turns (resume recap, load context, etc.) — displayed with different styling.
+    """
+
+    def __init__(
+        self,
+        content: str,
+        game_over: bool = False,
+        ending: str | None = None,
+        role: str = "assistant",
+    ):
         super().__init__()
         self.content = content
         self.game_over = game_over
         self.ending = ending
+        self.role = role
 
 
 class ChatPanel(Vertical):
@@ -571,11 +582,18 @@ class GameScreen(Screen):
         self._agent_thread.start()
 
     def _run_resume_agent(self, resume_instruction: str) -> None:
-        """Run the LangGraph agent with a resume prompt (called in background thread)."""
+        """Run the LangGraph agent with a resume prompt (called in background thread).
+
+        This is a system-event turn — not player input.  It bypasses input_validator,
+        is never logged to conversation.jsonl, does not advance the turn counter, and
+        its messages are removed from graph state after the turn so they never appear
+        in the player's 5-turn history window.
+        """
         try:
             self.game_state["messages"].append(HumanMessage(content=resume_instruction))
             self.game_state["skip_conversation_log"] = True
             self.game_state["skip_turn_increment"] = True
+            self.game_state["skip_validation"] = True   # System event — bypass validator
             result = self.graph.invoke(self.game_state)
             self.game_state = result
 
@@ -587,12 +605,14 @@ class GameScreen(Screen):
                 content=narrative or "(No response)",
                 game_over=game_over,
                 ending=ending,
+                role="system",  # Resume recap shown with system styling, not as a game turn
             ))
         except Exception as e:
             self.post_message(AgentResponse(
                 content=f"[Engine error: {e}]",
                 game_over=False,
                 ending=None,
+                role="system",
             ))
 
     # -------------------------------------------------------------------------
@@ -667,7 +687,8 @@ class GameScreen(Screen):
         try:
             chat = self.query_one("#chat-panel", ChatPanel)
             chat.hide_thinking()
-            chat.add_streaming_message("assistant", message.content)
+            # System-event responses (resume/load recap) stream with "system" styling
+            chat.add_streaming_message(message.role, message.content)
         except NoMatches:
             # Fallback: re-enable input immediately if chat panel not found
             self._finish_response()
