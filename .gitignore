@@ -1,5 +1,5 @@
 saves/
 session/
 __pycache__/
-/.claude
+.claude
 .env

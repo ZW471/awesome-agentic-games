@@ -569,6 +569,8 @@ class GameScreen(Screen):
         """Run the LangGraph agent with a resume prompt (called in background thread)."""
         try:
             self.game_state["messages"].append(HumanMessage(content=resume_instruction))
+            self.game_state["skip_conversation_log"] = True
+            self.game_state["skip_turn_increment"] = True
             result = self.graph.invoke(self.game_state)
             self.game_state = result
 

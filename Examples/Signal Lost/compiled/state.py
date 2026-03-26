@@ -45,6 +45,10 @@ class GameState(TypedDict):
     # --- Session directory path ---
     session_dir: str      # Path to session/ folder
 
+    # --- Flags ---
+    skip_conversation_log: bool  # If True, state_writer skips logging to conversation.jsonl
+    skip_turn_increment: bool    # If True, world_ticker skips incrementing the turn counter
+
 
 # ---------------------------------------------------------------------------
 # File I/O helpers
@@ -150,6 +154,8 @@ def initial_state(session_dir: str) -> GameState:
         ending=None,
         narrative="",
         session_dir=session_dir,
+        skip_conversation_log=False,
+        skip_turn_increment=False,
     )
 
 

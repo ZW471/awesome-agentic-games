@@ -13,7 +13,7 @@ import copy
 import json
 from typing import Literal
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
@@ -144,6 +144,22 @@ def after_tools(state: GameState) -> Literal["resolver", "state_writer"]:
 # Pure Python. Applies state mutations from tool call results to game state.
 # ---------------------------------------------------------------------------
 
+def _current_turn_messages(messages: list) -> list:
+    """Return only messages from the current turn (after the last HumanMessage).
+
+    This prevents reprocessing ToolMessages from previous turns that are
+    still in state due to the add_messages reducer accumulating messages.
+    """
+    # Find the index of the last HumanMessage — that's where the current turn starts
+    last_human_idx = -1
+    for i, msg in enumerate(messages):
+        if isinstance(msg, HumanMessage):
+            last_human_idx = i
+    if last_human_idx < 0:
+        return messages
+    return messages[last_human_idx:]
+
+
 def state_writer(state: GameState) -> dict:
     """Process tool results and apply state changes to session files."""
     session_dir = state["session_dir"]
@@ -156,15 +172,19 @@ def state_writer(state: GameState) -> dict:
     world_state = copy.deepcopy(state["world_state"])
     log = copy.deepcopy(state["log"])
 
-    # Extract narrative from the last AI message
+    # Only process messages from the current turn to avoid
+    # reprocessing old ToolMessages that accumulate in state.
+    current_msgs = _current_turn_messages(state["messages"])
+
+    # Extract narrative from the last AI message (current turn only)
     narrative = ""
-    for msg in reversed(state["messages"]):
+    for msg in reversed(current_msgs):
         if isinstance(msg, AIMessage) and msg.content and not msg.tool_calls:
             narrative = msg.content
             break
 
-    # Process tool results for state mutations
-    for msg in state["messages"]:
+    # Process tool results for state mutations (current turn only)
+    for msg in current_msgs:
         if not isinstance(msg, ToolMessage):
             continue
 
@@ -203,7 +223,16 @@ def state_writer(state: GameState) -> dict:
             key = type_map.get(entry_type, entry_type + "s")
             if key not in knowledge:
                 knowledge[key] = []
-            knowledge[key].append(entry)
+            # Skip if an entry with the same ID already exists
+            entry_id = entry.get("id") or entry.get("statement", "")
+            existing_ids = {
+                e.get("id") or e.get("statement", "")
+                for e in knowledge[key]
+            }
+            if entry_id and entry_id in existing_ids:
+                pass  # Duplicate — skip
+            else:
+                knowledge[key].append(entry)
 
         elif mutation_type == "update_npc":
             npc_name = result.get("name", "")
@@ -316,12 +345,19 @@ def state_writer(state: GameState) -> dict:
 
         elif mutation_type == "add_log_entry":
             entries = log.get("entries", [])
-            entries.append({
+            new_entry = {
                 "turn": player.get("turn", 1),
                 "title": result.get("title", "Event"),
                 "tag": result.get("tag", "system"),
                 "text": result.get("text", ""),
-            })
+            }
+            # Skip if an entry with the same title+text already exists this turn
+            is_dup = any(
+                e.get("title") == new_entry["title"] and e.get("text") == new_entry["text"]
+                for e in entries
+            )
+            if not is_dup:
+                entries.append(new_entry)
             # Keep max 30 entries
             if len(entries) > 30:
                 entries = entries[-30:]
@@ -336,16 +372,34 @@ def state_writer(state: GameState) -> dict:
     save_session_file(session_dir, "world_state", world_state)
     save_session_file(session_dir, "log", log)
 
-    # Log conversation
-    turn = player.get("turn", 1)
-    for msg in state["messages"]:
-        if isinstance(msg, HumanMessage):
-            append_conversation(session_dir, "user", str(msg.content), turn)
-    if narrative:
-        append_conversation(session_dir, "assistant", narrative, turn)
+    # Log conversation (skip for resume/load recaps)
+    # Only log current turn's HumanMessage, not all accumulated ones
+    if not state.get("skip_conversation_log", False):
+        turn = player.get("turn", 1)
+        for msg in current_msgs:
+            if isinstance(msg, HumanMessage):
+                append_conversation(session_dir, "user", str(msg.content), turn)
+        if narrative:
+            append_conversation(session_dir, "assistant", narrative, turn)
 
-    # Reduce messages — collapse tool call noise
-    reduced = reduce_turn_messages(state["messages"])
+    # Build removal list for processed tool messages to prevent reprocessing.
+    # The add_messages reducer accumulates messages — returning a subset does
+    # NOT remove old ones.  We must emit explicit RemoveMessage directives.
+    removals: list = []
+    for msg in current_msgs:
+        if isinstance(msg, ToolMessage):
+            removals.append(RemoveMessage(id=msg.id))
+        elif isinstance(msg, AIMessage) and msg.tool_calls:
+            removals.append(RemoveMessage(id=msg.id))
+
+    # Keep a compact summary of what happened + the final narrative
+    reduced_new: list = []
+    tool_summary = reduce_turn_messages(current_msgs)
+    # From the reduced set, only keep the SystemMessage summary (tool recap)
+    # The HumanMessage and final AIMessage are already in state from earlier nodes
+    for msg in tool_summary:
+        if isinstance(msg, SystemMessage) and "[Turn mechanics:" in str(msg.content):
+            reduced_new.append(msg)
 
     return {
         "player": player,
@@ -357,7 +411,8 @@ def state_writer(state: GameState) -> dict:
         "world_state": world_state,
         "log": log,
         "narrative": narrative,
-        "messages": reduced,
+        "messages": removals + reduced_new,
+        "skip_conversation_log": False,
     }
 
 
@@ -371,6 +426,12 @@ def world_ticker(state: GameState) -> dict:
     player = copy.deepcopy(state["player"])
     world_state = copy.deepcopy(state["world_state"])
     session_dir = state["session_dir"]
+
+    # Skip turn increment on resume/load (no real player action taken)
+    if state.get("skip_turn_increment", False):
+        save_session_file(session_dir, "player", player)
+        save_session_file(session_dir, "world_state", world_state)
+        return {"player": player, "world_state": world_state, "skip_turn_increment": False}
 
     # Increment turn
     turn = player.get("turn", 1)
