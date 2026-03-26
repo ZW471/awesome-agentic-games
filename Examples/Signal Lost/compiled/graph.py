@@ -59,10 +59,24 @@ def set_llm(llm):
 # Pure Python. Loads state, builds dynamic prompt, prepares messages.
 # ---------------------------------------------------------------------------
 
+def _read_language_setting(session_dir: str) -> str:
+    """Read language from settings/custom.json, falling back to 'en'."""
+    import os as _os
+    game_root = _os.path.abspath(_os.path.join(session_dir, ".."))
+    custom_path = _os.path.join(game_root, "settings", "custom.json")
+    try:
+        with open(custom_path, "r", encoding="utf-8") as f:
+            import json as _json
+            settings = _json.load(f)
+        return settings.get("language", {}).get("display", "en")
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return "en"
+
+
 def input_gate(state: GameState) -> dict:
     """Prepare the LLM context for this turn."""
-    # Determine language from settings or default
-    language = "en"  # TODO: read from settings
+    # Read language from settings
+    language = _read_language_setting(state["session_dir"])
 
     # Build the full system prompt with dynamic context
     system_prompt = build_full_prompt(state, language)

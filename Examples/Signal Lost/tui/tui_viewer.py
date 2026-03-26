@@ -1261,31 +1261,19 @@ class SessionParser:
         return entries
 
     def parse_conversation(self) -> list[dict]:
-        """Read the append-only conversation.jsonl (JSON Lines format).
-
-        Handles malformed entries where a JSON object spans multiple lines
-        by accumulating lines until a valid JSON object is parsed.
-        """
+        """Read the append-only conversation.jsonl (JSON Lines format)."""
         path = self.session_dir / "conversation.jsonl"
         entries = []
         try:
             with open(path, encoding="utf-8") as f:
-                buffer = ""
                 for line in f:
                     stripped = line.strip()
                     if not stripped:
                         continue
-                    if buffer:
-                        buffer += " " + stripped
-                    else:
-                        buffer = stripped
                     try:
-                        entries.append(json.loads(buffer))
-                        buffer = ""
+                        entries.append(json.loads(stripped))
                     except json.JSONDecodeError:
-                        # Might be a multi-line JSON object; keep accumulating
                         continue
-                # If there's leftover in buffer, discard it (incomplete entry)
         except (FileNotFoundError, PermissionError):
             pass
         return entries

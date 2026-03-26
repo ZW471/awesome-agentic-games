@@ -87,6 +87,38 @@ ENV_KEY_NAMES = {
 
 
 # =============================================================================
+# Shared mixin for provider-readiness checks
+# =============================================================================
+
+class _ProviderReadyMixin:
+    """Shared helper to check if provider is configured and launch directly."""
+
+    def _provider_ready(self) -> bool:
+        cfg = _load_provider_config()
+        provider = cfg.get("provider")
+        model = cfg.get("model")
+        if not provider or not model:
+            return False
+        env_key_name = ENV_KEY_NAMES.get(provider, "")
+        if not env_key_name:
+            return False
+        env = _load_env(ENV_PATH)
+        return bool(env.get(env_key_name, "") or os.environ.get(env_key_name, ""))
+
+    def _launch_directly(self, mode: str) -> None:
+        cfg = _load_provider_config()
+        provider = cfg["provider"]
+        model = cfg["model"]
+        temperature = cfg.get("temperature", 0.7)
+        env_key_name = ENV_KEY_NAMES.get(provider, "")
+        env = _load_env(ENV_PATH)
+        existing_key = env.get(env_key_name, "") or os.environ.get(env_key_name, "")
+        if existing_key:
+            os.environ[env_key_name] = existing_key
+        self.app.launch_game(mode, provider, model, temperature)
+
+
+# =============================================================================
 # START SCREEN
 # =============================================================================
 
@@ -137,6 +169,11 @@ StartScreen {
     color: #00ff41;
 }
 
+#btn-settings {
+    background: #1a1a00;
+    color: #ffbf00;
+}
+
 #btn-quit {
     background: #1a0000;
     color: #ff3333;
@@ -144,7 +181,7 @@ StartScreen {
 """
 
 
-class StartScreen(Screen):
+class StartScreen(_ProviderReadyMixin, Screen):
     DEFAULT_CSS = START_CSS
 
     BINDINGS = [
@@ -173,6 +210,7 @@ class StartScreen(Screen):
                 yield Button("NEW GAME", id="btn-new", classes="menu-btn")
                 yield Button("LOAD GAME", id="btn-load", classes="menu-btn")
                 yield Button("RESUME", id="btn-resume", classes="menu-btn")
+                yield Button("SETTINGS", id="btn-settings", classes="menu-btn")
                 yield Button("QUIT", id="btn-quit", classes="menu-btn")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -183,14 +221,234 @@ class StartScreen(Screen):
         elif event.button.id == "btn-resume":
             player_path = os.path.join(DEFAULT_SESSION_DIR, "player.json")
             if os.path.isfile(player_path):
-                self.app.push_screen(ProviderScreen(mode="resume"))
+                if self._provider_ready():
+                    self._launch_directly("resume")
+                else:
+                    self.app.push_screen(ProviderScreen(mode="resume"))
             else:
                 self.notify("No active session found. Start a new game or load a save.", severity="error", timeout=4)
+        elif event.button.id == "btn-settings":
+            self.app.push_screen(SettingsScreen())
         elif event.button.id == "btn-quit":
             self.app.exit()
 
     def action_quit_app(self) -> None:
         self.app.exit()
+
+
+# =============================================================================
+# SETTINGS SCREEN
+# =============================================================================
+
+SETTINGS_CSS = """
+SettingsScreen {
+    align: center middle;
+    background: #0a0a0f;
+}
+
+#settings-container {
+    width: 65;
+    height: auto;
+    max-height: 90%;
+    padding: 2 4;
+    border: heavy #ffbf00;
+    background: #0d0d1a;
+}
+
+#settings-title {
+    text-align: center;
+    color: #ffbf00;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.settings-label {
+    color: #ff00ff;
+    margin-top: 1;
+}
+
+.settings-hint {
+    color: #444466;
+}
+
+#btn-settings-save {
+    margin-top: 2;
+    width: 100%;
+    background: #1a0033;
+    color: #ff00ff;
+}
+
+#btn-settings-back {
+    margin-top: 1;
+    width: 100%;
+    background: #1a0000;
+    color: #ff3333;
+}
+"""
+
+
+def _load_custom_settings() -> dict:
+    """Load custom.json settings."""
+    custom_path = os.path.join(SETTINGS_DIR, "custom.json")
+    try:
+        with open(custom_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_custom_settings(settings: dict) -> None:
+    """Save settings to custom.json."""
+    custom_path = os.path.join(SETTINGS_DIR, "custom.json")
+    os.makedirs(os.path.dirname(custom_path), exist_ok=True)
+    with open(custom_path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=2)
+
+
+class SettingsScreen(Screen):
+    DEFAULT_CSS = SETTINGS_CSS
+
+    BINDINGS = [
+        Binding("escape", "go_back", "Back", show=True),
+    ]
+
+    def compose(self) -> ComposeResult:
+        # Load current settings
+        custom = _load_custom_settings()
+        provider_cfg = _load_provider_config()
+        current_lang = custom.get("language", {}).get("display", "en")
+        current_provider = provider_cfg.get("provider", "openai")
+        current_model = provider_cfg.get("model", DEFAULT_MODELS.get(current_provider, ""))
+        current_temp = str(provider_cfg.get("temperature", 0.7))
+
+        env = _load_env(ENV_PATH)
+        env_key_name = ENV_KEY_NAMES.get(current_provider, "")
+        has_key = bool(env.get(env_key_name, "") or os.environ.get(env_key_name, ""))
+
+        with Center():
+            with VerticalScroll(id="settings-container"):
+                yield Static("SETTINGS / 设置", id="settings-title")
+
+                yield Label("Language / 语言", classes="settings-label")
+                yield Select(
+                    [
+                        ("English", "en"),
+                        ("中文", "zh"),
+                    ],
+                    value=current_lang,
+                    id="settings-language",
+                )
+
+                yield Label("Provider", classes="settings-label")
+                yield Select(
+                    [
+                        ("OpenAI", "openai"),
+                        ("Anthropic", "anthropic"),
+                    ],
+                    value=current_provider,
+                    id="settings-provider",
+                )
+
+                yield Label("Model", classes="settings-label")
+                yield Input(value=current_model, placeholder="Model name", id="settings-model")
+
+                yield Label("API Key", classes="settings-label", id="settings-label-api-key")
+                yield Static("(loaded from .env)", classes="settings-hint", id="settings-api-key-hint")
+                yield Input(
+                    placeholder="Paste your API key (leave empty to keep current)",
+                    password=True,
+                    id="settings-api-key",
+                )
+
+                yield Label("Temperature", classes="settings-label")
+                yield Input(value=current_temp, placeholder="0.0 - 1.0", id="settings-temperature")
+
+                yield Button("SAVE / 保存", id="btn-settings-save")
+                yield Button("BACK", id="btn-settings-back")
+
+        self.set_timer(0.05, self._update_key_visibility)
+
+    def _update_key_visibility(self) -> None:
+        try:
+            provider = self.query_one("#settings-provider", Select).value
+            env_key_name = ENV_KEY_NAMES.get(provider, "")
+            env = _load_env(ENV_PATH)
+            has_key = bool(env.get(env_key_name, "") or os.environ.get(env_key_name, ""))
+
+            key_input = self.query_one("#settings-api-key", Input)
+            hint = self.query_one("#settings-api-key-hint", Static)
+            if has_key:
+                key_input.display = False
+                hint.display = True
+                hint.update("(loaded from .env)")
+            else:
+                key_input.display = True
+                hint.display = False
+        except Exception:
+            pass
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "settings-provider":
+            provider = event.value
+            model_input = self.query_one("#settings-model", Input)
+            model_input.value = DEFAULT_MODELS.get(provider, "")
+            self._update_key_visibility()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-settings-save":
+            self._save()
+        elif event.button.id == "btn-settings-back":
+            self.action_go_back()
+
+    def _save(self) -> None:
+        language = self.query_one("#settings-language", Select).value
+        provider = self.query_one("#settings-provider", Select).value
+        model = self.query_one("#settings-model", Input).value.strip()
+        api_key = self.query_one("#settings-api-key", Input).value.strip()
+        temperature_str = self.query_one("#settings-temperature", Input).value.strip()
+
+        if not model:
+            self.notify("Model name cannot be empty.", severity="error", timeout=3)
+            return
+
+        try:
+            temperature = float(temperature_str)
+        except ValueError:
+            self.notify("Invalid temperature value.", severity="error", timeout=3)
+            return
+
+        # Save language to custom.json
+        custom = _load_custom_settings()
+        if "language" not in custom:
+            custom["language"] = {}
+        custom["language"]["display"] = language
+        custom["language"]["tui"] = language
+        _save_custom_settings(custom)
+
+        # Save provider + model
+        _save_provider_config(provider, model)
+
+        # Save temperature to provider config
+        try:
+            with open(PROVIDER_CONFIG_PATH, "r", encoding="utf-8") as f:
+                pcfg = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            pcfg = {}
+        pcfg["temperature"] = temperature
+        with open(PROVIDER_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(pcfg, f, indent=2)
+
+        # Save API key if provided
+        if api_key:
+            env_key_name = ENV_KEY_NAMES.get(provider, "")
+            _save_env(ENV_PATH, env_key_name, api_key)
+            os.environ[env_key_name] = api_key
+
+        self.notify("Settings saved!", severity="information", timeout=3)
+        self.app.pop_screen()
+
+    def action_go_back(self) -> None:
+        self.app.pop_screen()
 
 
 # =============================================================================
@@ -245,7 +503,7 @@ NewGameScreen {
 """
 
 
-class NewGameScreen(Screen):
+class NewGameScreen(_ProviderReadyMixin, Screen):
     DEFAULT_CSS = NEW_GAME_CSS
 
     BINDINGS = [
@@ -253,6 +511,10 @@ class NewGameScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
+        # Pre-populate language from global settings
+        custom = _load_custom_settings()
+        current_lang = custom.get("language", {}).get("display", "en")
+
         with Center():
             with VerticalScroll(id="newgame-container"):
                 yield Static("CHARACTER CREATION / 角色创建", id="newgame-title")
@@ -292,7 +554,7 @@ class NewGameScreen(Screen):
                         ("English", "en"),
                         ("中文", "zh"),
                     ],
-                    value="en",
+                    value=current_lang,
                     id="select-language",
                 )
 
@@ -316,7 +578,10 @@ class NewGameScreen(Screen):
                 "difficulty": self.query_one("#select-difficulty", Select).value,
                 "language": self.query_one("#select-language", Select).value,
             }
-            self.app.push_screen(ProviderScreen(mode="new_game"))
+            if self._provider_ready():
+                self._launch_directly("new_game")
+            else:
+                self.app.push_screen(ProviderScreen(mode="new_game"))
         elif event.button.id == "btn-newgame-back":
             self.action_go_back()
 
@@ -379,7 +644,7 @@ def _read_json_safe(path: str) -> dict:
         return {}
 
 
-class LoadGameScreen(Screen):
+class LoadGameScreen(_ProviderReadyMixin, Screen):
     DEFAULT_CSS = LOAD_GAME_CSS
 
     BINDINGS = [
@@ -431,7 +696,10 @@ class LoadGameScreen(Screen):
         idx = event.option_index
         if 0 <= idx < len(self._save_dirs):
             self.app.load_save_path = self._save_dirs[idx]
-            self.app.push_screen(ProviderScreen(mode="load_game"))
+            if self._provider_ready():
+                self._launch_directly("load_game")
+            else:
+                self.app.push_screen(ProviderScreen(mode="load_game"))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-load-back":

@@ -106,7 +106,7 @@ def append_conversation(session_dir: str, role: str, content: str, turn: int) ->
     path = os.path.join(session_dir, "conversation.jsonl")
     entry = {
         "role": role,
-        "content": content.replace("\n", "\\n"),
+        "content": content,
         "turn": turn,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }

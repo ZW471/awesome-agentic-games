@@ -121,6 +121,86 @@ class ChatMessage(Static):
         return Group(prefix + body)
 
 
+class ThinkingIndicator(Static):
+    """Animated thinking indicator shown while the agent is processing."""
+
+    SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._frame = 0
+        self._timer = None
+
+    def on_mount(self) -> None:
+        self._timer = self.set_interval(0.1, self._tick)
+
+    def _tick(self) -> None:
+        self._frame = (self._frame + 1) % len(self.SPINNER_FRAMES)
+        self.refresh()
+
+    def render(self):
+        spinner = self.SPINNER_FRAMES[self._frame]
+        return Text(f"  {spinner} decrypting signal...", style="bold #ff00ff")
+
+    def on_unmount(self) -> None:
+        if self._timer:
+            self._timer.stop()
+
+
+class StreamingMessage(Static):
+    """A message that streams its content character by character."""
+
+    class Done(Message):
+        """Posted when streaming is complete."""
+        pass
+
+    def __init__(self, role: str, full_content: str, chars_per_tick: int = 3, **kwargs):
+        super().__init__(**kwargs)
+        self.role = role
+        self.full_content = full_content
+        self._revealed = 0
+        self._chars_per_tick = chars_per_tick
+        self._timer = None
+
+    def on_mount(self) -> None:
+        self._timer = self.set_interval(0.03, self._stream_tick)
+
+    def _stream_tick(self) -> None:
+        if self._revealed < len(self.full_content):
+            self._revealed = min(self._revealed + self._chars_per_tick, len(self.full_content))
+            self.refresh(layout=True)
+            # Auto-scroll parent container
+            try:
+                parent = self.parent
+                if isinstance(parent, VerticalScroll):
+                    parent.scroll_end(animate=False)
+            except Exception:
+                pass
+        else:
+            if self._timer:
+                self._timer.stop()
+                self._timer = None
+            self.post_message(self.Done())
+
+    def render(self):
+        visible = self.full_content[:self._revealed]
+        if self.role == "assistant":
+            prefix = Text("\u25c6 SIGNAL LOST: ", style="bold #ff00ff")
+            body = Text(visible, style="#e0e0e0")
+        elif self.role == "user":
+            prefix = Text("\u25b6 YOU: ", style="bold #00ffff")
+            body = Text(visible, style="#00ffff")
+        else:
+            prefix = Text("\u25cf SYSTEM: ", style="bold #ffbf00")
+            body = Text(visible, style="#ffbf00")
+        cursor = Text("▌", style="bold #ff00ff") if self._revealed < len(self.full_content) else Text("")
+        return Group(prefix + body + cursor)
+
+    def on_unmount(self) -> None:
+        if self._timer:
+            self._timer.stop()
+
+
 class AgentResponse(Message):
     """Message posted when the agent produces a response."""
 
@@ -137,6 +217,8 @@ class ChatPanel(Vertical):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.message_queue: Queue = Queue()
+        self._thinking: ThinkingIndicator | None = None
+        self._streaming: StreamingMessage | None = None
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="chat-messages"):
@@ -151,12 +233,35 @@ class ChatPanel(Vertical):
         )
 
     def add_message(self, role: str, content: str) -> None:
-        """Add a message to the chat display."""
+        """Add a message to the chat display (instant, no streaming)."""
         css_class = f"msg-{role}" if role in ("player", "agent", "system") else "msg-agent"
         actual_role = "user" if role == "player" else role
         msg_widget = ChatMessage(actual_role, content, classes=css_class)
         container = self.query_one("#chat-messages", VerticalScroll)
         container.mount(msg_widget)
+        container.scroll_end(animate=False)
+
+    def show_thinking(self) -> None:
+        """Show an animated thinking indicator."""
+        self.hide_thinking()
+        container = self.query_one("#chat-messages", VerticalScroll)
+        self._thinking = ThinkingIndicator(classes="msg-system")
+        container.mount(self._thinking)
+        container.scroll_end(animate=False)
+
+    def hide_thinking(self) -> None:
+        """Remove the thinking indicator."""
+        if self._thinking is not None:
+            self._thinking.remove()
+            self._thinking = None
+
+    def add_streaming_message(self, role: str, content: str) -> None:
+        """Add a message that streams in character by character."""
+        css_class = f"msg-{role}" if role in ("player", "agent", "system") else "msg-agent"
+        actual_role = "user" if role == "player" else role
+        container = self.query_one("#chat-messages", VerticalScroll)
+        self._streaming = StreamingMessage(actual_role, content, classes=css_class)
+        container.mount(self._streaming)
         container.scroll_end(animate=False)
 
 
@@ -205,6 +310,8 @@ class GameScreen(Screen):
         self.session_data: dict = {}
         self.lang = "en"
         self._agent_thread: threading.Thread | None = None
+        self._pending_game_over: bool = False
+        self._pending_ending: str | None = None
 
         # Load language setting
         settings = self.parser.parse_settings()
@@ -263,7 +370,7 @@ class GameScreen(Screen):
                         with VerticalScroll():
                             yield LogPanel(self.session_data, self.lang, id="panel-log")
                     with TabPane(L["tab_conversations"], id="tab-conversations"):
-                        with VerticalScroll():
+                        with VerticalScroll(id="conversations-scroll"):
                             yield OrigConversationPanel(self.session_data, self.lang, id="panel-conversations")
                     with TabPane(L["tab_tools"], id="tab-tools"):
                         with VerticalScroll():
@@ -310,6 +417,7 @@ class GameScreen(Screen):
             except NoMatches:
                 pass
 
+
     def action_refresh(self) -> None:
         self._load_data()
         self._update_all_panels()
@@ -343,6 +451,14 @@ class GameScreen(Screen):
                 tabs.active = tab_ids[index]
         except NoMatches:
             pass
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """Scroll conversation panel to bottom when its tab is selected."""
+        if event.pane and event.pane.id == "tab-conversations":
+            try:
+                self.query_one("#conversations-scroll", VerticalScroll).scroll_end(animate=False)
+            except NoMatches:
+                pass
 
     # Tab shortcuts
     def action_tab_1(self): self._switch_tab(0)
@@ -433,6 +549,7 @@ class GameScreen(Screen):
         try:
             chat = self.query_one("#chat-panel", ChatPanel)
             chat.add_message("system", "Restoring session... loading previous context.")
+            chat.show_thinking()
         except NoMatches:
             return
 
@@ -494,6 +611,7 @@ class GameScreen(Screen):
         try:
             chat = self.query_one("#chat-panel", ChatPanel)
             chat.add_message("player", text)
+            chat.show_thinking()
         except NoMatches:
             return
 
@@ -534,6 +652,23 @@ class GameScreen(Screen):
 
     def on_agent_response(self, message: AgentResponse) -> None:
         """Handle agent response (posted from background thread)."""
+        self._pending_game_over = message.game_over
+        self._pending_ending = message.ending
+
+        try:
+            chat = self.query_one("#chat-panel", ChatPanel)
+            chat.hide_thinking()
+            chat.add_streaming_message("assistant", message.content)
+        except NoMatches:
+            # Fallback: re-enable input immediately if chat panel not found
+            self._finish_response()
+
+    def on_streaming_message_done(self, message: StreamingMessage.Done) -> None:
+        """Called when the streaming text animation completes."""
+        self._finish_response()
+
+    def _finish_response(self) -> None:
+        """Re-enable input and handle game-over after streaming completes."""
         # Re-enable input
         try:
             self.query_one("#chat-input", Input).disabled = False
@@ -541,19 +676,14 @@ class GameScreen(Screen):
         except NoMatches:
             pass
 
-        try:
-            chat = self.query_one("#chat-panel", ChatPanel)
-            chat.add_message("assistant", message.content)
-        except NoMatches:
-            pass
-
         # Refresh panels after agent turn
         self._load_data()
         self._update_all_panels()
 
-        if message.game_over:
+        if getattr(self, "_pending_game_over", False):
+            ending = getattr(self, "_pending_ending", None)
             self.notify(
-                f"GAME OVER \u2014 {(message.ending or 'unknown').upper()}",
+                f"GAME OVER \u2014 {(ending or 'unknown').upper()}",
                 severity="error",
                 timeout=10,
             )
