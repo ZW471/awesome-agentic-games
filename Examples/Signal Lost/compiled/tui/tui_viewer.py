@@ -312,6 +312,7 @@ class GameScreen(Screen):
         self._agent_thread: threading.Thread | None = None
         self._pending_game_over: bool = False
         self._pending_ending: str | None = None
+        self._game_over: bool = False
 
         # Load language setting
         settings = self.parser.parse_settings()
@@ -476,6 +477,10 @@ class GameScreen(Screen):
     # -------------------------------------------------------------------------
 
     def action_save_game(self) -> None:
+        if self._agent_thread and self._agent_thread.is_alive():
+            self.notify("Cannot save while the agent is thinking.", severity="warning", timeout=3)
+            return
+
         from tui.screens import SaveScreen
 
         alias = self.game_state.get("player", {}).get("alias", "save")
@@ -608,6 +613,8 @@ class GameScreen(Screen):
         text = text.strip()
         if not text:
             return
+        if self._game_over:
+            return
 
         # Display player message
         try:
@@ -671,24 +678,23 @@ class GameScreen(Screen):
 
     def _finish_response(self) -> None:
         """Re-enable input and handle game-over after streaming completes."""
-        # Re-enable input
-        try:
-            self.query_one("#chat-input", Input).disabled = False
-            self.query_one("#chat-input", Input).focus()
-        except NoMatches:
-            pass
-
         # Refresh panels after agent turn
         self._load_data()
         self._update_all_panels()
 
         if getattr(self, "_pending_game_over", False):
+            self._game_over = True
             ending = getattr(self, "_pending_ending", None)
-            self.notify(
-                f"GAME OVER \u2014 {(ending or 'unknown').upper()}",
-                severity="error",
-                timeout=10,
-            )
+            # Input stays disabled — game is over; show dedicated screen
+            from tui.screens import GameOverScreen
+            self.app.push_screen(GameOverScreen(ending=ending))
+        else:
+            # Re-enable input only when game is still running
+            try:
+                self.query_one("#chat-input", Input).disabled = False
+                self.query_one("#chat-input", Input).focus()
+            except NoMatches:
+                pass
 
     def _handle_tools_input(self, text: str) -> None:
         """Handle tool commands (dice, cipher, etc.)."""
@@ -712,8 +718,11 @@ class GameScreen(Screen):
                 strength = int(parts[1]) if len(parts) > 1 else 30
                 result = analyze_signal.invoke({"scan": True, "strength": strength})
                 output = str(result)
+            elif cmd == "glitch":
+                result = generate_glitch_event.invoke({})
+                output = str(result)
             else:
-                output = f"Unknown command: {cmd}. Try: dice d100, cipher <text>, signal <strength>"
+                output = f"Unknown command: {cmd}. Try: dice d100, cipher <text>, signal <strength>, glitch"
 
             try:
                 panel = self.query_one("#panel-tools", ToolsPanel)

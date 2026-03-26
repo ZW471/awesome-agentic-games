@@ -217,7 +217,24 @@ def state_writer(state: GameState) -> dict:
             for k, v in changes.items():
                 if k in ("turn", "time"):
                     continue  # Handled by world_ticker
-                player[k] = v
+                if k == "integrity":
+                    # Always preserve integrity as {"current": N, "max": N}
+                    existing = player.get("integrity", {})
+                    if not isinstance(existing, dict):
+                        existing = {"current": existing, "max": existing}
+                    if isinstance(v, dict):
+                        player["integrity"] = {
+                            "current": v.get("current", existing.get("current", 1)),
+                            "max": v.get("max", existing.get("max", existing.get("current", 1))),
+                        }
+                    else:
+                        # LLM sent a bare integer — update current, preserve max
+                        player["integrity"] = {
+                            "current": int(v),
+                            "max": existing.get("max", int(v)),
+                        }
+                else:
+                    player[k] = v
 
         elif mutation_type == "add_knowledge":
             entry_type = result.get("entry_type", "")

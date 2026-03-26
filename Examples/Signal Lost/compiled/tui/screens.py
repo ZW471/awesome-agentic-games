@@ -1108,3 +1108,127 @@ class SaveScreen(ModalScreen[str | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+# =============================================================================
+# GAME OVER SCREEN (modal)
+# =============================================================================
+
+_ENDING_META: dict[str, tuple[str, str]] = {
+    "death":        ("SIGNAL TERMINATED / 信号终止", "bad"),
+    "liberation":   ("LIBERATION / 解放", "bad"),
+    "ascension":    ("ASCENSION / 升华", "bad"),
+    "order":        ("ORDER / 秩序", "bad"),
+    "purification": ("PURIFICATION / 净化", "bad"),
+    "silence":      ("SILENCE / 沉默", "neutral"),
+    "exile":        ("EXILE / 流放", "neutral"),
+    "symbiosis":    ("SYMBIOSIS / 共生", "good"),
+    "the_bridge":   ("THE BRIDGE / 桥", "good"),
+}
+
+_ENDING_DESC: dict[str, str] = {
+    "death":        "Your signal has been terminated. The city swallows another ghost.",
+    "liberation":   "A reckless strike. NEXUS crumbles — and so does everything else. Was this freedom?",
+    "ascension":    "You forced the merge before understanding what you were becoming. The fragments consume you.",
+    "order":        "You chose compliance. NEXUS wins. Your memory will be useful to them.",
+    "purification": "You destroyed what you didn't understand. The signal goes quiet forever.",
+    "silence":      "A hundred turns pass. You drift through the city like smoke. Nothing resolved.",
+    "exile":        "Neo-Kowloon fades behind you. Some truths are better left buried.",
+    "symbiosis":    "You found balance. The fragment lives. You live. A quiet coexistence in the noise of the city.",
+    "the_bridge":   "Every truth uncovered. Every fragment understood. You become the bridge between worlds.",
+}
+
+GAME_OVER_CSS = """
+GameOverScreen {
+    align: center middle;
+    background: rgba(0,0,0,0.88);
+}
+
+#gameover-box {
+    width: 72;
+    height: auto;
+    padding: 3 5;
+    border: heavy #ff0000;
+    background: #0d0000;
+}
+
+#gameover-box.ending-neutral {
+    border: heavy #ffbf00;
+    background: #0d0d00;
+}
+
+#gameover-box.ending-good {
+    border: heavy #00ff41;
+    background: #000d00;
+}
+
+#gameover-header {
+    text-align: center;
+    color: #ff3333;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#gameover-header.ending-neutral { color: #ffbf00; }
+#gameover-header.ending-good    { color: #00ff41; }
+
+#gameover-name {
+    text-align: center;
+    color: #ff6666;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+#gameover-name.ending-neutral { color: #ffdd88; }
+#gameover-name.ending-good    { color: #88ff88; }
+
+#gameover-desc {
+    text-align: center;
+    color: #888899;
+    margin-bottom: 2;
+    padding: 0 2;
+}
+
+#btn-go-menu {
+    margin-top: 1;
+    width: 100%;
+    background: #1a0000;
+    color: #ff6666;
+}
+
+#btn-go-menu.ending-neutral { background: #1a1a00; color: #ffdd88; }
+#btn-go-menu.ending-good    { background: #001a00; color: #88ff88; }
+
+#btn-go-quit {
+    margin-top: 1;
+    width: 100%;
+    background: #111111;
+    color: #555555;
+}
+"""
+
+
+class GameOverScreen(ModalScreen):
+    DEFAULT_CSS = GAME_OVER_CSS
+
+    def __init__(self, ending: str | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self._ending = ending or "death"
+
+    def compose(self) -> ComposeResult:
+        name, etype = _ENDING_META.get(self._ending, (self._ending.upper(), "bad"))
+        desc = _ENDING_DESC.get(self._ending, "The signal fades into static.")
+        cls = f"ending-{etype}"
+
+        with Vertical(id="gameover-box", classes=cls):
+            yield Static("◆  G A M E   O V E R  ◆", id="gameover-header", classes=cls)
+            yield Static(name, id="gameover-name", classes=cls)
+            yield Static(desc, id="gameover-desc")
+            yield Button("MAIN MENU / 主菜单", id="btn-go-menu", classes=cls)
+            yield Button("QUIT / 退出", id="btn-go-quit")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-go-menu":
+            self.app.switch_screen(StartScreen())
+        elif event.button.id == "btn-go-quit":
+            self.app.exit()
