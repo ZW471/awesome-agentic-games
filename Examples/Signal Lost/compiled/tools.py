@@ -17,6 +17,19 @@ import importlib.util
 
 from langchain_core.tools import tool
 
+# ---------------------------------------------------------------------------
+# Session directory (set by input_gate each turn for file-access tools)
+# ---------------------------------------------------------------------------
+
+_current_session_dir: str | None = None
+
+
+def set_session_dir(session_dir: str) -> None:
+    """Set the active session directory. Called by input_gate at the start of each turn."""
+    global _current_session_dir
+    _current_session_dir = session_dir
+
+
 # Add the game's tools/ directory to path so we can import directly
 _GAME_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _TOOLS_DIR = os.path.join(_GAME_ROOT, "tools")
@@ -288,6 +301,50 @@ def add_log_entry(title: str, tag: str, text: str) -> str:
     return json.dumps({"type": "add_log_entry", "title": title, "tag": tag, "text": text})
 
 
+@tool
+def recall_conversation(last_n: int = 20, search: str | None = None) -> dict:
+    """Retrieve older conversation history from the session log.
+
+    Use this when the player references events, dialogue, or decisions from
+    more than 5 turns ago that aren't visible in the current context window.
+
+    Args:
+        last_n: Number of most recent exchanges to retrieve (default 20, max 100)
+        search: Optional keyword to filter entries by content (case-insensitive)
+    """
+    if not _current_session_dir:
+        return {"entries": [], "count": 0, "error": "Session not initialized"}
+
+    path = os.path.join(_current_session_dir, "conversation.jsonl")
+    try:
+        entries = []
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    entries.append(json.loads(line))
+    except FileNotFoundError:
+        return {"entries": [], "count": 0, "error": "No conversation history yet"}
+    except OSError as e:
+        return {"entries": [], "count": 0, "error": str(e)}
+
+    if search:
+        entries = [e for e in entries if search.lower() in e.get("content", "").lower()]
+
+    cap = min(int(last_n), 100)
+    recent = entries[-cap:] if len(entries) > cap else entries
+
+    formatted = [
+        {
+            "turn": e.get("turn", "?"),
+            "role": e.get("role", "?"),
+            "content": str(e.get("content", ""))[:400],
+        }
+        for e in recent
+    ]
+    return {"entries": formatted, "count": len(formatted)}
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Tool collections for the graph
 # ═══════════════════════════════════════════════════════════════════════════
@@ -299,6 +356,7 @@ GAME_TOOLS = [
     analyze_signal,
     generate_glitch_event,
     generate_minor_npc,
+    recall_conversation,
 ]
 
 # State mutation tools — the LLM calls these to express state changes

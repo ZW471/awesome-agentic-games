@@ -275,31 +275,74 @@ def build_knowledge_context(knowledge: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Full prompt assembly
+# Layer depth extractor (shared utility)
 # ---------------------------------------------------------------------------
 
-def build_full_prompt(state: dict, language: str = "en") -> str:
-    """Assemble the complete system prompt for the resolver LLM."""
-    # Determine deepest layer from traces
+def extract_deepest_layer(state: dict) -> int:
+    """Compute the deepest narrative layer the player has reached from discovered traces."""
     discovered = state.get("traces", {}).get("discovered", [])
-    deepest_layer = 0
+    deepest = 0
     for trace in discovered:
         trace_id = trace.get("id", "")
-        # Extract layer number from TRACE-LN-NN
         parts = trace_id.split("-")
         if len(parts) >= 2:
             try:
-                layer = int(parts[1][1:])  # "L2" -> 2
-                deepest_layer = max(deepest_layer, layer)
+                deepest = max(deepest, int(parts[1][1:]))  # "L2" -> 2
             except (ValueError, IndexError):
                 pass
+    return deepest
 
-    sections = [
+
+# ---------------------------------------------------------------------------
+# Static prompt (behavioral rules + world lore — only changes with layer depth)
+# ---------------------------------------------------------------------------
+
+def build_static_prompt(language: str, deepest_layer: int) -> str:
+    """Build the static behavioral system prompt.
+
+    This changes only when the language setting or the player's deepest layer
+    changes (new world-lore sections unlock). Keep this out of the per-turn rebuild.
+    """
+    return "\n\n".join([
         SYSTEM_PROMPT.format(language=language),
         build_background_prompt(deepest_layer),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# Dynamic state prompt (game snapshot — rebuilt every turn)
+# ---------------------------------------------------------------------------
+
+def build_log_context(log: dict, max_entries: int = 5) -> str:
+    """Format the most recent log entries for inclusion in the dynamic state block."""
+    entries = log.get("entries", [])
+    if not entries:
+        return ""
+    recent = entries[-max_entries:]
+    lines = ["## Recent Events (Session Log)"]
+    for e in recent:
+        turn = e.get("turn", "?")
+        title = e.get("title", "")
+        text = e.get("text", e.get("description", ""))
+        tag = e.get("tag", "")
+        if tag:
+            lines.append(f"- [T{turn}][{tag}] {title}: {text}")
+        else:
+            lines.append(f"- [T{turn}] {title}: {text}")
+    return "\n".join(lines)
+
+
+def build_dynamic_state_prompt(state: dict) -> str:
+    """Build the dynamic game-state block injected every turn.
+
+    Contains: current player/location/world status, recent log entries,
+    full knowledge database, and encountered NPCs.
+    """
+    sections = [
+        "[LIVE GAME STATE — updated each turn]",
         build_state_summary(state),
+        build_log_context(state.get("log", {})),
         build_knowledge_context(state.get("knowledge", {})),
         build_npc_context(state.get("npcs", {})),
     ]
-
     return "\n\n".join(s for s in sections if s)

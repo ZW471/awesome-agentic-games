@@ -78,75 +78,43 @@ def reduce_turn_messages(messages: list[BaseMessage]) -> list[BaseMessage]:
     return result
 
 
-def apply_sliding_window(
+def trim_to_window(
     messages: list[BaseMessage],
-    max_recent_turns: int = 10,
-    max_total_messages: int = 60,
-) -> list[BaseMessage]:
-    """Apply a sliding window to keep context manageable.
+    max_turns: int = 5,
+) -> tuple[list[BaseMessage], list[BaseMessage]]:
+    """Identify which conversation messages fall outside the active window.
 
-    Strategy:
-    - Always keep the system message(s) at the start
-    - Keep the last `max_recent_turns` turn pairs in full
-    - Summarize older turns to one line each
-    - Hard cap at `max_total_messages`
+    Returns (to_keep, to_remove):
+      - to_keep: messages within the last `max_turns` turns
+      - to_remove: messages older than the window (caller emits RemoveMessage for these)
+
+    SystemMessages are excluded from the window count — they are managed separately
+    by input_gate. The caller is responsible for removing/replacing system messages.
+
+    A "turn" begins with each HumanMessage. Inline [Turn mechanics: ...] SystemMessages
+    that appear between HumanMessages are counted as part of the preceding turn.
     """
-    if len(messages) <= max_total_messages:
-        return messages
+    # Strip system messages — managed externally
+    conversation = [m for m in messages if not isinstance(m, SystemMessage)]
 
-    # Separate system messages from conversation
-    system_msgs = []
-    conversation = []
-    for msg in messages:
-        if isinstance(msg, SystemMessage) and not conversation:
-            system_msgs.append(msg)
-        else:
-            conversation.append(msg)
-
-    # Identify turn boundaries (each turn starts with a HumanMessage)
+    # Group into turns (each turn starts with a HumanMessage)
     turns: list[list[BaseMessage]] = []
     current_turn: list[BaseMessage] = []
     for msg in conversation:
         if isinstance(msg, HumanMessage) and current_turn:
             turns.append(current_turn)
-            current_turn = []
-        current_turn.append(msg)
+            current_turn = [msg]
+        else:
+            current_turn.append(msg)
     if current_turn:
         turns.append(current_turn)
 
-    if len(turns) <= max_recent_turns:
-        return messages
+    if len(turns) <= max_turns:
+        return conversation, []
 
-    # Summarize older turns
-    old_turns = turns[:-max_recent_turns]
-    recent_turns = turns[-max_recent_turns:]
+    old_turns = turns[:-max_turns]
+    recent_turns = turns[-max_turns:]
 
-    old_summaries = []
-    for turn in old_turns:
-        # Extract player action and AI response
-        player_action = ""
-        ai_response = ""
-        for msg in turn:
-            if isinstance(msg, HumanMessage):
-                player_action = str(msg.content)[:60]
-            elif isinstance(msg, AIMessage) and msg.content and not msg.tool_calls:
-                ai_response = str(msg.content)[:60]
-
-        if player_action or ai_response:
-            summary = f"Player: {player_action}"
-            if ai_response:
-                summary += f" → {ai_response}"
-            old_summaries.append(summary)
-
-    # Build compressed history
-    result = list(system_msgs)
-    if old_summaries:
-        compressed = "\n".join(f"- {s}" for s in old_summaries)
-        result.append(SystemMessage(
-            content=f"[Earlier conversation summary ({len(old_turns)} turns):\n{compressed}]"
-        ))
-
-    for turn in recent_turns:
-        result.extend(turn)
-
-    return result
+    to_remove = [msg for turn in old_turns for msg in turn]
+    to_keep = [msg for turn in recent_turns for msg in turn]
+    return to_keep, to_remove
