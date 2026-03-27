@@ -54,7 +54,6 @@ from tui_viewer import (  # noqa: E402
     WorldPanel,
     LogPanel,
     ConversationPanel as OrigConversationPanel,
-    ToolsPanel,
     LABELS,
     make_css,
 )
@@ -214,12 +213,14 @@ class AgentResponse(Message):
         game_over: bool = False,
         ending: str | None = None,
         role: str = "assistant",
+        narrative: str = "",
     ):
         super().__init__()
         self.content = content
         self.game_over = game_over
         self.ending = ending
         self.role = role
+        self.narrative = narrative
 
 
 class ChatPanel(Vertical):
@@ -289,7 +290,6 @@ class GameScreen(Screen):
         Binding("ctrl+s", "save_game", "Save", show=True, priority=True),
         Binding("r", "refresh", "Refresh", show=True, priority=False),
         Binding("t", "focus_chat", "Chat", show=True, priority=False),
-        Binding("d", "focus_tools_input", "Tools", show=True, priority=False),
         Binding("1", "tab_1", "1", show=False),
         Binding("2", "tab_2", "2", show=False),
         Binding("3", "tab_3", "3", show=False),
@@ -354,7 +354,6 @@ class GameScreen(Screen):
                     L["tab_world"],
                     L["tab_log"],
                     L["tab_conversations"],
-                    L["tab_tools"],
                     id="tabs",
                 ):
                     with TabPane(L["tab_identity"], id="tab-identity"):
@@ -384,13 +383,6 @@ class GameScreen(Screen):
                     with TabPane(L["tab_conversations"], id="tab-conversations"):
                         with VerticalScroll(id="conversations-scroll"):
                             yield OrigConversationPanel(self.session_data, self.lang, id="panel-conversations")
-                    with TabPane(L["tab_tools"], id="tab-tools"):
-                        with VerticalScroll():
-                            yield ToolsPanel(self.session_data, self.lang, id="panel-tools")
-                        yield Input(
-                            placeholder=self.L["tools_input_placeholder"],
-                            id="tools-input",
-                        )
         yield Footer()
 
     def on_mount(self) -> None:
@@ -418,7 +410,7 @@ class GameScreen(Screen):
         panel_ids = [
             "#status-bar", "#panel-identity", "#panel-knowledge", "#panel-traces",
             "#panel-district", "#panel-inventory", "#panel-network", "#panel-world",
-            "#panel-log", "#panel-conversations", "#panel-tools",
+            "#panel-log", "#panel-conversations",
         ]
         for widget_id in panel_ids:
             try:
@@ -445,19 +437,13 @@ class GameScreen(Screen):
         except NoMatches:
             pass
 
-    def action_focus_tools_input(self) -> None:
-        try:
-            self.query_one("#tools-input", Input).focus()
-        except NoMatches:
-            pass
-
     def _switch_tab(self, index: int) -> None:
         try:
             tabs = self.query_one("#tabs", TabbedContent)
             tab_ids = [
                 "tab-identity", "tab-knowledge", "tab-traces",
                 "tab-district", "tab-inventory", "tab-network",
-                "tab-world", "tab-log", "tab-conversations", "tab-tools",
+                "tab-world", "tab-log", "tab-conversations",
             ]
             if 0 <= index < len(tab_ids):
                 tabs.active = tab_ids[index]
@@ -620,12 +606,9 @@ class GameScreen(Screen):
     # -------------------------------------------------------------------------
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Handle input from chat or tools."""
+        """Handle input from chat."""
         if event.input.id == "chat-input":
             self._handle_chat_input(event.value)
-            event.input.value = ""
-        elif event.input.id == "tools-input":
-            self._handle_tools_input(event.value)
             event.input.value = ""
 
     def _handle_chat_input(self, text: str) -> None:
@@ -683,6 +666,7 @@ class GameScreen(Screen):
         """Handle agent response (posted from background thread)."""
         self._pending_game_over = message.game_over
         self._pending_ending = message.ending
+        self._pending_narrative = message.content
 
         try:
             chat = self.query_one("#chat-panel", ChatPanel)
@@ -706,9 +690,10 @@ class GameScreen(Screen):
         if getattr(self, "_pending_game_over", False):
             self._game_over = True
             ending = getattr(self, "_pending_ending", None)
-            # Input stays disabled — game is over; show dedicated screen
+            narrative = getattr(self, "_pending_narrative", "")
+            # Input stays disabled — game is over; show dedicated screen with final narrative
             from tui.screens import GameOverScreen
-            self.app.push_screen(GameOverScreen(ending=ending))
+            self.app.push_screen(GameOverScreen(ending=ending, narrative=narrative))
         else:
             # Re-enable input only when game is still running
             try:
@@ -717,43 +702,6 @@ class GameScreen(Screen):
             except NoMatches:
                 pass
 
-    def _handle_tools_input(self, text: str) -> None:
-        """Handle tool commands (dice, cipher, etc.)."""
-        text = text.strip().lower()
-        if not text:
-            return
-
-        from tools import roll_dice, decrypt_cipher, analyze_signal, generate_glitch_event
-
-        try:
-            parts = text.split()
-            cmd = parts[0]
-
-            if cmd == "dice" and len(parts) > 1:
-                result = roll_dice.invoke({"expression": parts[1]})
-                output = str(result)
-            elif cmd == "cipher" and len(parts) > 1:
-                result = decrypt_cipher.invoke({"method": "analyze", "text": " ".join(parts[1:])})
-                output = str(result)
-            elif cmd in ("signal", "scan"):
-                strength = int(parts[1]) if len(parts) > 1 else 30
-                result = analyze_signal.invoke({"scan": True, "strength": strength})
-                output = str(result)
-            elif cmd == "glitch":
-                result = generate_glitch_event.invoke({})
-                output = str(result)
-            else:
-                output = f"Unknown command: {cmd}. Try: dice d100, cipher <text>, signal <strength>, glitch"
-
-            try:
-                panel = self.query_one("#panel-tools", ToolsPanel)
-                panel.last_result = output
-                panel.refresh(layout=True)
-            except NoMatches:
-                pass
-
-        except Exception as e:
-            self.notify(f"Tool error: {e}", severity="error")
 
 
 # Backward-compatible alias

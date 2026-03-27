@@ -120,10 +120,10 @@ def input_gate(state: GameState) -> dict:
         # Reset per-turn flags carried over from the previous turn
         "input_blocked": False,
         "blocking_reason": None,
-        "skip_conversation_log": False,
-        "skip_turn_increment": False,
-        # NOTE: skip_validation is NOT reset here — it is set by the TUI BEFORE
-        # invoking the graph and must survive into input_validator this same turn.
+        # NOTE: skip_validation, skip_conversation_log, and skip_turn_increment are NOT
+        # reset here — they are set by the TUI BEFORE invoking the graph and must
+        # survive into their respective nodes (input_validator, state_writer, world_ticker).
+        # Each of those nodes resets the flag itself after consuming it.
     }
 
 
@@ -295,15 +295,15 @@ tool_executor = ToolNode(ALL_TOOLS)
 
 
 # ---------------------------------------------------------------------------
-# Routing: should we continue tool calling or move to state_writer?
+# Routing: should we continue tool calling or move to language checker?
 # ---------------------------------------------------------------------------
 
-def should_continue_tools(state: GameState) -> Literal["tool_executor", "state_writer"]:
+def should_continue_tools(state: GameState) -> Literal["tool_executor", "output_language_checker"]:
     """Check if the last message has tool calls that need execution."""
     last_message = state["messages"][-1]
     if isinstance(last_message, AIMessage) and last_message.tool_calls:
         return "tool_executor"
-    return "state_writer"
+    return "output_language_checker"
 
 
 def after_tools(state: GameState) -> Literal["resolver", "state_writer"]:
@@ -312,6 +312,127 @@ def after_tools(state: GameState) -> Literal["resolver", "state_writer"]:
     # Look at the message before the tool messages — if it had tool_calls,
     # the resolver needs to see the results
     return "resolver"
+
+
+# ---------------------------------------------------------------------------
+# Node: output_language_checker
+# Checks that the LLM narrative and tool arguments are in the configured
+# language.  If the language is zh but output is English, injects a
+# correction SystemMessage and loops back to resolver (once).
+# ---------------------------------------------------------------------------
+
+def _cjk_ratio(text: str) -> float:
+    """Return ratio of CJK chars to all alphabetic+CJK chars (0–1)."""
+    cjk = sum(
+        1 for c in text
+        if "\u4e00" <= c <= "\u9fff"
+        or "\u3400" <= c <= "\u4dbf"
+        or "\uff00" <= c <= "\uffef"
+    )
+    alpha = sum(1 for c in text if c.isalpha())
+    return cjk / alpha if alpha else 1.0
+
+
+def _is_english(text: str) -> bool:
+    """True if the text is primarily English (CJK ratio < 20%)."""
+    stripped = text.strip()
+    if len(stripped) < 8:          # Too short to judge
+        return False
+    return _cjk_ratio(stripped) < 0.20
+
+
+def _find_english_fields(obj, path: str = "") -> list[str]:
+    """Recursively scan dict/list and return paths of English string values."""
+    problems: list[str] = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            child = f"{path}.{k}" if path else k
+            problems.extend(_find_english_fields(v, child))
+    elif isinstance(obj, list):
+        for i, v in enumerate(obj):
+            problems.extend(_find_english_fields(v, f"{path}[{i}]"))
+    elif isinstance(obj, str) and _is_english(obj):
+        snippet = obj[:60] + ("…" if len(obj) > 60 else "")
+        problems.append(f'  · {path}: "{snippet}"')
+    return problems
+
+
+def output_language_checker(state: GameState) -> dict:
+    """Verify LLM output matches the configured display language.
+
+    Skipped for system-event turns (resume/load) and for any language other
+    than 'zh'.  If Chinese is required but the output is in English, a
+    correction SystemMessage is injected and the resolver is re-run once.
+    The retry counter prevents infinite loops.
+    """
+    # System-event turns (resume recaps) skip language validation
+    if state.get("skip_conversation_log", False):
+        return {"language_retry_count": 0}
+
+    session_dir = state["session_dir"]
+    language = _read_language_setting(session_dir)
+
+    # Only enforce Chinese — English is always a valid fallback
+    if language != "zh":
+        return {"language_retry_count": 0}
+
+    # Already retried once — accept output and move on
+    retry_count = state.get("language_retry_count", 0)
+    if retry_count >= 1:
+        return {"language_retry_count": 0}
+
+    messages = state["messages"]
+    current_msgs = _current_turn_messages(messages)
+    problems: list[str] = []
+
+    # 1. Check narrative (last AI message without tool calls)
+    for msg in reversed(current_msgs):
+        if isinstance(msg, AIMessage) and msg.content and not msg.tool_calls:
+            if _is_english(str(msg.content)):
+                snippet = str(msg.content)[:80] + "…"
+                problems.append(f'  · narrative: "{snippet}"')
+            break
+
+    # 2. Check tool call arguments for text fields
+    for msg in current_msgs:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            for tc in msg.tool_calls:
+                args = tc.get("args", {})
+                problems.extend(_find_english_fields(args, tc.get("name", "tool")))
+
+    if not problems:
+        return {"language_retry_count": 0}
+
+    # Build correction message with specific problems listed
+    problem_text = "\n".join(problems)
+    correction = SystemMessage(content=(
+        "[语言校正 / LANGUAGE CORRECTION]\n"
+        "游戏语言设置为简体中文，但你的上一条回复包含了英文内容。\n"
+        "The game language is set to 简体中文 (Simplified Chinese), "
+        "but your previous response contained English where Chinese was required.\n\n"
+        f"检测到的问题 / Problems detected:\n{problem_text}\n\n"
+        "请用中文重新生成完整回复。规则：\n"
+        "Please regenerate your entire response in Chinese. Rules:\n"
+        "- 叙事文本、状态效果名称与强度、日志标题、世界事件、NPC 对话必须用中文\n"
+        "  (Narrative, status effect names/intensities, log titles, world events, "
+        "NPC dialogue must be in Chinese)\n"
+        "- 专有名词可保留英文：NEXUS、Signal、Netrunner、district 名称等\n"
+        "  (Proper nouns may stay in English: NEXUS, Signal, Netrunner, district names, etc.)\n"
+        "- 工具命令保持英文：dice、cipher、signal、glitch\n"
+        "  (Tool commands stay in English: dice, cipher, signal, glitch)"
+    ))
+
+    return {
+        "messages": [correction],
+        "language_retry_count": 1,
+    }
+
+
+def route_after_language_check(state: GameState) -> Literal["resolver", "state_writer"]:
+    """Route to resolver for a retry, or proceed to state_writer."""
+    if state.get("language_retry_count", 0) >= 1:
+        return "resolver"
+    return "state_writer"
 
 
 # ---------------------------------------------------------------------------
@@ -434,10 +555,12 @@ def state_writer(state: GameState) -> dict:
             for npc in npc_list:
                 if npc.get("name", "").lower() == npc_name.lower():
                     npc.update(changes)
+                    # Track the turn of last player↔NPC interaction for world_simulator
+                    npc["last_interaction_turn"] = player.get("turn", 1)
                     found = True
                     break
             if not found:
-                new_npc = {"name": npc_name}
+                new_npc = {"name": npc_name, "last_interaction_turn": player.get("turn", 1)}
                 new_npc.update(changes)
                 npc_list.append(new_npc)
                 npcs["npcs"] = npc_list
@@ -481,18 +604,18 @@ def state_writer(state: GameState) -> dict:
                 if isinstance(alert, dict):
                     current = alert.get("current", 0)
                     alert["current"] = max(0, min(100, current + changes["nexus_alert_delta"]))
-                    # Update status text
+                    # Update status text (en + zh)
                     val = alert["current"]
                     if val <= 20:
-                        alert["status"] = "Calm"
+                        alert["status"], alert["status_zh"] = "Calm", "平静"
                     elif val <= 40:
-                        alert["status"] = "Watchful"
+                        alert["status"], alert["status_zh"] = "Watchful", "警觉"
                     elif val <= 60:
-                        alert["status"] = "Alert"
+                        alert["status"], alert["status_zh"] = "Alert", "戒备"
                     elif val <= 80:
-                        alert["status"] = "Manhunt"
+                        alert["status"], alert["status_zh"] = "Manhunt", "追捕"
                     else:
-                        alert["status"] = "Lockdown"
+                        alert["status"], alert["status_zh"] = "Lockdown", "戒严"
                     world_state["nexus_alert"] = alert
 
             if "fragment_decay_delta" in changes:
@@ -502,13 +625,13 @@ def state_writer(state: GameState) -> dict:
                     decay["current"] = max(0, min(100, current + changes["fragment_decay_delta"]))
                     val = decay["current"]
                     if val < 25:
-                        decay["status"] = "Stable"
+                        decay["status"], decay["status_zh"] = "Stable", "稳定"
                     elif val < 50:
-                        decay["status"] = "Fading"
+                        decay["status"], decay["status_zh"] = "Fading", "消散"
                     elif val < 75:
-                        decay["status"] = "Critical"
+                        decay["status"], decay["status_zh"] = "Critical", "危机"
                     else:
-                        decay["status"] = "Terminal"
+                        decay["status"], decay["status_zh"] = "Terminal", "终末"
                     world_state["fragment_decay"] = decay
 
             if "discover_district" in changes:
@@ -564,9 +687,22 @@ def state_writer(state: GameState) -> dict:
     save_session_file(session_dir, "world_state", world_state)
     save_session_file(session_dir, "log", log)
 
-    # Log conversation (skip for resume/load recaps)
-    # Only log current turn's HumanMessage, not all accumulated ones
-    if not state.get("skip_conversation_log", False):
+    # Log conversation (skip for resume/load recaps and system events)
+    # Triple guard: flag check + skip_validation check + content pattern check
+    is_system_turn = (
+        state.get("skip_conversation_log", False)
+        or state.get("skip_validation", False)
+    )
+    # Content-based guard: detect resume/system prompts that should never be logged
+    _SYSTEM_CONTENT_MARKERS = ("[RESUMING SESSION]", "[LOADING SAVE]", "[SYSTEM EVENT]")
+    for msg in current_msgs:
+        if isinstance(msg, HumanMessage):
+            content_str = str(msg.content)
+            if any(marker in content_str for marker in _SYSTEM_CONTENT_MARKERS):
+                is_system_turn = True
+                break
+
+    if not is_system_turn:
         turn = player.get("turn", 1)
         for msg in current_msgs:
             if isinstance(msg, HumanMessage):
@@ -654,9 +790,13 @@ def world_ticker(state: GameState) -> dict:
                 next_idx = (i + 1) % len(TIME_PERIODS)
                 player["time"] = TIME_PERIODS[next_idx]
 
-                # Update world_state time
+                # Update world_state time (keep all fields in sync)
+                _TIME_ZH_MAP = {"Morning": "晨", "Afternoon": "午", "Night": "夜", "Evening": "夕"}
                 time_data = world_state.get("time", {})
-                time_data["period"] = TIME_PERIODS[next_idx]
+                new_period = TIME_PERIODS[next_idx]
+                time_data["period"] = new_period
+                time_data["time_of_day"] = new_period
+                time_data["time_of_day_zh"] = _TIME_ZH_MAP.get(new_period, new_period)
                 if next_idx == 0:  # New day
                     time_data["day"] = time_data.get("day", 1) + 1
                 world_state["time"] = time_data
@@ -676,6 +816,213 @@ def world_ticker(state: GameState) -> dict:
         "player": player,
         "world_state": world_state,
     }
+
+
+# ---------------------------------------------------------------------------
+# Node: world_simulator
+# Lightweight LLM call (no tools) that simulates autonomous NPC and world
+# actions after each player turn.  NPCs may follow up on ignored messages,
+# relocate, express emotional states, or trigger off-screen world events —
+# entirely independent of the player.
+# ---------------------------------------------------------------------------
+
+_WORLD_SIM_SYSTEM = """\
+You are the autonomous world simulation engine for Signal Lost (信号遗失).
+
+After each player turn, decide what NPCs and the world do on their own — \
+independent of the player. You have full freedom to move NPCs, change their \
+mood, make them act on their own agenda, or generate world events.
+
+## NPC Behaviour Guidelines
+- NPCs with `turns_since_interaction >= 3` may send a follow-up, grow impatient, \
+  leave, or act on their own (their patience wears thin).
+- NPCs in OTHER districts still live their lives: they run errands, cut deals, \
+  get arrested, go into hiding, move to a new area, etc.
+- NPCs loyal to NEXUS may quietly tip off patrols when suspicious.
+- Only simulate NPCs who would realistically DO something this turn. \
+  Do NOT simulate every NPC every turn — be selective and realistic.
+
+## World Events
+- NEXUS patrols may increase/decrease based on world state.
+- Shops/services may open or close.
+- A rumour may spread.  A contact may get burned.  A district may lock down.
+- These happen regardless of the player and may be invisible to them.
+
+## Output Rules
+- Return ONLY valid JSON — no prose outside the JSON block.
+- `visible_to_player`: true only if the player would directly observe or \
+  receive this (they're in the same area, get a message, hear about it nearby).
+- `player_text`: what the player perceives (null if not visible).  \
+  Written in second-person present tense, atmospheric, 1-3 sentences max.
+- `npc_updates`: partial dict to merge into the NPC record \
+  (e.g. location, status, mood, last_action).  Omit unchanged fields.
+- `world_updates.nexus_alert_delta`: integer to add to NEXUS alert (can be negative).
+- `world_updates.add_event`: short string to append to global_events (or null).
+- Return `{"events": []}` if nothing notable happens this turn.
+
+JSON schema:
+{
+  "events": [
+    {
+      "npc_name": "<string or null for pure world event>",
+      "action_type": "message|move|mood_shift|world_event|disappear|followup",
+      "visible_to_player": <bool>,
+      "player_text": "<string or null>",
+      "npc_updates": {},
+      "world_updates": {"nexus_alert_delta": 0, "add_event": null}
+    }
+  ]
+}
+"""
+
+
+def world_simulator(state: GameState) -> dict:
+    """Simulate autonomous NPC and world actions after the player's turn.
+
+    Runs a lightweight LLM call (no tools) to decide what NPCs do on their
+    own: follow-ups, location moves, mood shifts, off-screen world impacts.
+    Visible events are appended to the turn's narrative.
+    """
+    player = state["player"]
+    npcs = copy.deepcopy(state["npcs"])
+    world_state = copy.deepcopy(state["world_state"])
+    location = state["location"]
+    session_dir = state["session_dir"]
+
+    npc_list = npcs.get("npcs", [])
+    current_turn = player.get("turn", 1)
+
+    # Skip if no NPCs have been encountered yet — nothing to simulate
+    if not npc_list:
+        return {}
+
+    # Build a lean context snapshot for the LLM
+    context = {
+        "current_turn": current_turn,
+        "time_of_day": player.get("time", "Unknown"),
+        "nexus_alert": world_state.get("nexus_alert", {}),
+        "player_location": {
+            "district": location.get("district", ""),
+            "area": location.get("area", ""),
+        },
+        "npcs": [
+            {
+                "name": npc.get("name", ""),
+                "location": npc.get("location", "unknown"),
+                "status": npc.get("status", "unknown"),
+                "mood": npc.get("mood", "neutral"),
+                "trust": npc.get("trust", "neutral"),
+                "role": npc.get("role", ""),
+                "last_interaction_turn": npc.get("last_interaction_turn", 0),
+                "turns_since_interaction": current_turn - npc.get("last_interaction_turn", 0),
+                "last_action": npc.get("last_action", ""),
+                "notes": npc.get("notes", ""),
+            }
+            for npc in npc_list
+        ],
+        "recent_world_events": world_state.get("global_events", [])[-3:],
+    }
+
+    language = _read_language_setting(session_dir)
+    lang_note = (
+        "\n\n## LANGUAGE\nAll player_text and add_event strings MUST be written in "
+        "简体中文 (Simplified Chinese). Proper nouns (NEXUS, Signal, district names) may "
+        "remain in English. Everything else must be Chinese."
+        if language == "zh" else ""
+    )
+
+    llm = get_llm()
+    try:
+        response = llm.invoke([
+            SystemMessage(content=_WORLD_SIM_SYSTEM + lang_note),
+            HumanMessage(content=json.dumps(context, ensure_ascii=False)),
+        ])
+        raw = response.content.strip()
+
+        # Strip thinking tags from local models
+        if "<think>" in raw:
+            raw = _strip_thinking(raw)
+
+        # Strip markdown fences if present
+        if "```" in raw:
+            raw = re.sub(r"```(?:json)?\s*", "", raw).replace("```", "").strip()
+
+        data = json.loads(raw)
+        events = data.get("events", [])
+    except Exception:
+        return {}  # World simulation failure is always non-fatal
+
+    if not events:
+        return {}
+
+    # Apply events to NPC and world state
+    npc_map = {npc.get("name", "").lower(): npc for npc in npc_list}
+    player_visible_texts: list[str] = []
+
+    for event in events:
+        npc_name = event.get("npc_name")
+        visible = event.get("visible_to_player", False)
+        player_text = event.get("player_text")
+        npc_updates = event.get("npc_updates") or {}
+        world_updates = event.get("world_updates") or {}
+
+        # Merge NPC updates
+        if npc_name:
+            key = npc_name.lower()
+            if key in npc_map:
+                npc_map[key].update(npc_updates)
+                npc_map[key]["last_world_sim_turn"] = current_turn
+
+        # Apply NEXUS alert delta
+        delta = world_updates.get("nexus_alert_delta", 0)
+        if delta:
+            alert = world_state.get("nexus_alert", {})
+            if isinstance(alert, dict):
+                alert["current"] = max(0, min(100, alert.get("current", 0) + delta))
+                val = alert["current"]
+                if val <= 20:
+                    alert["status"], alert["status_zh"] = "Calm", "平静"
+                elif val <= 40:
+                    alert["status"], alert["status_zh"] = "Watchful", "警觉"
+                elif val <= 60:
+                    alert["status"], alert["status_zh"] = "Alert", "戒备"
+                elif val <= 80:
+                    alert["status"], alert["status_zh"] = "Manhunt", "追捕"
+                else:
+                    alert["status"], alert["status_zh"] = "Lockdown", "戒严"
+                world_state["nexus_alert"] = alert
+
+        # Append world event string
+        world_event_str = world_updates.get("add_event")
+        if world_event_str:
+            events_list = world_state.get("global_events", [])
+            events_list.append(world_event_str)
+            world_state["global_events"] = events_list
+
+        # Collect player-visible text
+        if visible and player_text:
+            player_visible_texts.append(player_text)
+
+    # Rebuild NPC list preserving order
+    npcs["npcs"] = list(npc_map.values())
+
+    # Persist changed files
+    save_session_file(session_dir, "npcs", npcs)
+    save_session_file(session_dir, "world_state", world_state)
+
+    result: dict = {"npcs": npcs, "world_state": world_state}
+
+    # Append visible world events to the turn narrative
+    if player_visible_texts:
+        existing_narrative = state.get("narrative", "")
+        world_section = "\n\n".join(player_visible_texts)
+        result["narrative"] = (
+            existing_narrative + "\n\n---\n" + world_section
+            if existing_narrative
+            else world_section
+        )
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -780,8 +1127,10 @@ def build_graph() -> StateGraph:
     graph.add_node("input_blocked_handler", input_blocked_handler)
     graph.add_node("resolver", resolver)
     graph.add_node("tool_executor", tool_executor)
+    graph.add_node("output_language_checker", output_language_checker)
     graph.add_node("state_writer", state_writer)
     graph.add_node("world_ticker", world_ticker)
+    graph.add_node("world_simulator", world_simulator)
     graph.add_node("trace_checker", trace_checker)
     graph.add_node("consequence", consequence)
 
@@ -801,19 +1150,27 @@ def build_graph() -> StateGraph:
     # input_blocked_handler → END (no logging, no turn increment)
     graph.add_edge("input_blocked_handler", END)
 
-    # resolver → tools or state_writer
+    # resolver → tools or output_language_checker
     graph.add_conditional_edges(
         "resolver",
         should_continue_tools,
-        {"tool_executor": "tool_executor", "state_writer": "state_writer"},
+        {"tool_executor": "tool_executor", "output_language_checker": "output_language_checker"},
     )
 
     # tool_executor → back to resolver (for multi-step tool use)
     graph.add_edge("tool_executor", "resolver")
 
-    # state_writer → world_ticker → trace_checker → consequence
+    # output_language_checker → resolver (retry) or state_writer
+    graph.add_conditional_edges(
+        "output_language_checker",
+        route_after_language_check,
+        {"resolver": "resolver", "state_writer": "state_writer"},
+    )
+
+    # state_writer → world_ticker → world_simulator → trace_checker → consequence
     graph.add_edge("state_writer", "world_ticker")
-    graph.add_edge("world_ticker", "trace_checker")
+    graph.add_edge("world_ticker", "world_simulator")
+    graph.add_edge("world_simulator", "trace_checker")
     graph.add_edge("trace_checker", "consequence")
 
     # consequence → END (one turn per invocation)

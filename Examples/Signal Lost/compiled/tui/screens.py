@@ -1146,7 +1146,7 @@ GameOverScreen {
 
 #gameover-box {
     width: 72;
-    height: auto;
+    max-height: 80%;
     padding: 3 5;
     border: heavy #ff0000;
     background: #0d0000;
@@ -1182,6 +1182,14 @@ GameOverScreen {
 #gameover-name.ending-neutral { color: #ffdd88; }
 #gameover-name.ending-good    { color: #88ff88; }
 
+#gameover-narrative {
+    color: #ccccdd;
+    margin-bottom: 1;
+    padding: 1 2;
+    background: #0a0a12;
+    border: solid #333344;
+}
+
 #gameover-desc {
     text-align: center;
     color: #888899;
@@ -1211,9 +1219,10 @@ GameOverScreen {
 class GameOverScreen(ModalScreen):
     DEFAULT_CSS = GAME_OVER_CSS
 
-    def __init__(self, ending: str | None = None, **kwargs):
+    def __init__(self, ending: str | None = None, narrative: str = "", **kwargs):
         super().__init__(**kwargs)
         self._ending = ending or "death"
+        self._narrative = narrative
 
     def compose(self) -> ComposeResult:
         name, etype = _ENDING_META.get(self._ending, (self._ending.upper(), "bad"))
@@ -1223,6 +1232,8 @@ class GameOverScreen(ModalScreen):
         with Vertical(id="gameover-box", classes=cls):
             yield Static("◆  G A M E   O V E R  ◆", id="gameover-header", classes=cls)
             yield Static(name, id="gameover-name", classes=cls)
+            if self._narrative:
+                yield Static(self._narrative, id="gameover-narrative")
             yield Static(desc, id="gameover-desc")
             yield Button("MAIN MENU / 主菜单", id="btn-go-menu", classes=cls)
             yield Button("QUIT / 退出", id="btn-go-quit")

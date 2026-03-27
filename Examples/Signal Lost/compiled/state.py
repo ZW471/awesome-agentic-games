@@ -58,6 +58,10 @@ class GameState(TypedDict):
                                  # not player input — bypasses input_validator entirely and
                                  # makes the turn ephemeral (messages removed from history)
 
+    # --- Output language validation ---
+    language_retry_count: int    # How many times output_language_checker has retried this turn
+                                 # (capped at 1 to prevent infinite loops)
+
 
 # ---------------------------------------------------------------------------
 # File I/O helpers
@@ -168,6 +172,7 @@ def initial_state(session_dir: str) -> GameState:
         input_blocked=False,
         blocking_reason=None,
         skip_validation=False,
+        language_retry_count=0,
     )
 
 
