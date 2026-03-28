@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Read(//Users/dricpro/.claude/plugins/cache/claude-feishu-calendar/feishu-calendar/0.1.0/skills/feishu-calendar/scripts/**)",
-      "Bash(python -c \":*)"
-    ]
-  }
-}

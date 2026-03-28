@@ -1,0 +1,6 @@
+[submodule "Examples/Signal Lost"]
+	path = Examples/Signal Lost
+	url = https://github.com/ZW471/signal-lost.git
+[submodule "Examples/The Sundering of Aethermoor"]
+	path = Examples/The Sundering of Aethermoor
+	url = https://github.com/ZW471/the-sundering-of-aethermoor.git
