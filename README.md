@@ -67,7 +67,7 @@ This repo includes two example games to get you started:
 | Game | Description |
 |------|-------------|
 | [The Sundering of Aethermoor](Examples/The%20Sundering%20of%20Aethermoor/) | A dark fantasy RPG — play as a Riftwalker in a world being torn apart by the Void |
-| [Signal Lost](Examples/Signal%20Lost/) | A cyberpunk mystery — wake with no memory in Neo-Kowloon and follow the Signal to uncover layered truths |
+| [Signal Lost](Examples/Signal%20Lost/) | A cyberpunk knowledge-roguelike — piece together lost memories in rain-soaked Neo-Kowloon, where what you *know* determines what paths open and 5 layers of truth hide behind 16 discoverable traces |
 
 An example session of *The Sundering of Aethermoor*:
 

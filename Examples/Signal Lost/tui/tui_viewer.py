@@ -133,6 +133,30 @@ LABELS = {
         "high": "HIGH",
         "extreme": "EXTREME",
         "period": "Period",
+        "tool_desc_dice": "Roll dice  (e.g.  dice d100)",
+        "tool_desc_cipher": "Decode text  (cipher <text>)",
+        "tool_desc_signal": "Scan signals  (signal <N>)",
+        "tool_desc_map": "Glitch event  (glitch)",
+        "tool_cmd_dice": "dice d100",
+        "tool_cmd_cipher": "cipher <text>",
+        "tool_cmd_signal": "signal 50",
+        "tool_cmd_glitch": "glitch",
+        "click_to_use": "[click to use]",
+        "tool_results": "Results",
+        "tool_hint": "d=focus input",
+        "status_open": "open",
+        "status_locked": "locked",
+        "status_restricted": "restricted",
+        "status_hidden": "hidden",
+        "alert_calm": "CALM",
+        "alert_watchful": "WATCHFUL",
+        "alert_alert": "ALERT",
+        "alert_manhunt": "MANHUNT",
+        "alert_lockdown": "LOCKDOWN",
+        "decay_stable": "STABLE",
+        "decay_fading": "FADING",
+        "decay_critical": "CRITICAL",
+        "decay_terminal": "TERMINAL",
     },
     "zh": {
         "tab_identity": "身份",
@@ -211,6 +235,30 @@ LABELS = {
         "high": "高",
         "extreme": "极端",
         "period": "时段",
+        "tool_desc_dice": "掷骰子  (例: dice d100)",
+        "tool_desc_cipher": "解码文本  (cipher <内容>)",
+        "tool_desc_signal": "扫描信号  (signal <强度>)",
+        "tool_desc_map": "故障效果  (glitch)",
+        "tool_cmd_dice": "dice d100",
+        "tool_cmd_cipher": "cipher <内容>",
+        "tool_cmd_signal": "signal 50",
+        "tool_cmd_glitch": "glitch",
+        "click_to_use": "[点击使用]",
+        "tool_results": "结果",
+        "tool_hint": "d=聚焦输入",
+        "status_open": "开放",
+        "status_locked": "锁定",
+        "status_restricted": "限制",
+        "status_hidden": "隐藏",
+        "alert_calm": "平静",
+        "alert_watchful": "警觉",
+        "alert_alert": "戒备",
+        "alert_manhunt": "追捕",
+        "alert_lockdown": "戒严",
+        "decay_stable": "稳定",
+        "decay_fading": "消散",
+        "decay_critical": "危机",
+        "decay_terminal": "终末",
     },
 }
 
@@ -396,6 +444,20 @@ def _cjk_display_width(s: str) -> int:
         eaw = unicodedata.east_asian_width(ch)
         w += 2 if eaw in ("W", "F") else 1
     return w
+
+
+def _cjk_fit(s: str, width: int) -> str:
+    """Truncate string to at most `width` display columns, then pad to exactly `width`."""
+    result = ""
+    w = 0
+    for ch in s:
+        eaw = unicodedata.east_asian_width(ch)
+        cw = 2 if eaw in ("W", "F") else 1
+        if w + cw > width:
+            break
+        result += ch
+        w += cw
+    return result + " " * (width - w)
 
 
 # =============================================================================
@@ -1125,9 +1187,10 @@ class SessionParser:
             else:
                 pois.append(str(p))
 
-        # Format NPCs as strings
+        # Format NPCs — support both "npcs_present" and "npcs_here" keys
         npcs = []
-        for n in raw.get("npcs_present", []):
+        npc_list = raw.get("npcs_present", raw.get("npcs_here", []))
+        for n in npc_list:
             if isinstance(n, dict):
                 name = n.get("name_zh", n.get("name", ""))
                 ename = n.get("name", "")
@@ -1142,12 +1205,17 @@ class SessionParser:
         area = raw.get("area", "")
         area_zh = raw.get("area_zh", "")
 
+        # Fall back to top-level keys when "environment" sub-object is absent
+        signal = env.get("signal_strength", raw.get("signal_strength", 0))
+        danger = env.get("danger_level", raw.get("danger_level", "Safe"))
+        patrol = env.get("nexus_patrol", raw.get("nexus_patrol", "None"))
+
         return {
             "district": f"{district_zh}（{district}）" if district_zh else district,
             "area": f"{area_zh}（{area}）" if area_zh else area,
-            "signal_strength": env.get("signal_strength", 0),
-            "danger_level": env.get("danger_level", "Safe"),
-            "nexus_patrol": env.get("nexus_patrol", "None"),
+            "signal_strength": signal,
+            "danger_level": danger,
+            "nexus_patrol": patrol,
             "exits": exits,
             "pois": pois,
             "npcs": npcs,
@@ -1164,16 +1232,25 @@ class SessionParser:
             if isinstance(item, dict):
                 items.append({
                     "slot": item.get("slot", 0),
-                    "name": item.get("name", ""),
+                    "name": item.get("item", "") or item.get("name", ""),
                     "type": item.get("type", ""),
                     "description": item.get("description", ""),
                     "evidence_id": item.get("evidence_id", "") or "",
                 })
 
+        # Handle both flat (slots_used/slots_max) and nested (slots.used/slots.max) formats
+        slots = raw.get("slots", {})
+        if isinstance(slots, dict):
+            slots_used = slots.get("used", 0)
+            slots_max = slots.get("max", 6)
+        else:
+            slots_used = raw.get("slots_used", 0)
+            slots_max = raw.get("slots_max", 6)
+
         return {
             "credits": raw.get("credits", 0),
-            "slots_used": raw.get("slots_used", 0),
-            "slots_max": raw.get("slots_max", 6),
+            "slots_used": slots_used,
+            "slots_max": slots_max,
             "items": items,
         }
 
@@ -1228,15 +1305,19 @@ class SessionParser:
             elif isinstance(ev, dict):
                 events.append(ev.get("description", str(ev)))
 
-        period = time_data.get("time_of_day", "") if isinstance(time_data, dict) else ""
+        # Prefer "period" (kept up-to-date by world_ticker) over stale "time_of_day"
+        period = (time_data.get("period", "") or time_data.get("time_of_day", "")) if isinstance(time_data, dict) else ""
         period_zh = time_data.get("time_of_day_zh", "") if isinstance(time_data, dict) else ""
-        period_display = f"{period_zh}（{period}）" if period_zh else period
+        # Don't pre-format here — let the WorldPanel handle localization
+        period_display = period
 
         return {
             "nexus_alert": nexus.get("current", 0) if isinstance(nexus, dict) else 0,
             "alert_status": nexus.get("status", "") if isinstance(nexus, dict) else "",
+            "alert_status_zh": nexus.get("status_zh", "") if isinstance(nexus, dict) else "",
             "fragment_decay": decay.get("current", 0) if isinstance(decay, dict) else 0,
             "fragment_status": decay.get("status", "") if isinstance(decay, dict) else "",
+            "fragment_status_zh": decay.get("status_zh", "") if isinstance(decay, dict) else "",
             "districts": districts,
             "period": period_display,
             "turn": time_data.get("turn", 0) if isinstance(time_data, dict) else 0,
@@ -1261,31 +1342,19 @@ class SessionParser:
         return entries
 
     def parse_conversation(self) -> list[dict]:
-        """Read the append-only conversation.jsonl (JSON Lines format).
-
-        Handles malformed entries where a JSON object spans multiple lines
-        by accumulating lines until a valid JSON object is parsed.
-        """
+        """Read the append-only conversation.jsonl (JSON Lines format)."""
         path = self.session_dir / "conversation.jsonl"
         entries = []
         try:
             with open(path, encoding="utf-8") as f:
-                buffer = ""
                 for line in f:
                     stripped = line.strip()
                     if not stripped:
                         continue
-                    if buffer:
-                        buffer += " " + stripped
-                    else:
-                        buffer = stripped
                     try:
-                        entries.append(json.loads(buffer))
-                        buffer = ""
+                        entries.append(json.loads(stripped))
                     except json.JSONDecodeError:
-                        # Might be a multi-line JSON object; keep accumulating
                         continue
-                # If there's leftover in buffer, discard it (incomplete entry)
         except (FileNotFoundError, PermissionError):
             pass
         return entries
@@ -1312,10 +1381,73 @@ class SessionParser:
 class IdentityPanel(Static):
     """Player identity and status display."""
 
+    # ── Translation fallback maps (for data stored in English by LLM) ──
+    _BG_ZH = {
+        "netrunner": "网行者（Netrunner）",
+        "street runner": "街头行者（Street Runner）",
+        "corporate exile": "企业流亡者（Corporate Exile）",
+    }
+    _IMPLANT_ZH = {
+        "active": "激活（Active）",
+        "overloaded": "过载（Overloaded）",
+        "dormant": "休眠（Dormant）",
+        "resonating": "共鸣（Resonating）",
+        "damaged": "受损（Damaged）",
+    }
+    _EFFECT_NAME_ZH = {
+        "signal sensitivity": "信号敏感",
+        "neural fatigue": "神经疲劳",
+        "paranoia": "偏执",
+        "nexus tracked": "连结追踪",
+        "fragment resonance": "碎片共鸣",
+        "overload risk": "过载风险",
+        "stealth": "潜行",
+        "disguised": "伪装中",
+        "wounded": "受伤",
+        "poisoned": "中毒",
+        "hacked": "被入侵",
+    }
+    _INTENSITY_ZH = {
+        "faint": "微弱",
+        "mild": "轻微",
+        "moderate": "中等",
+        "strong": "强烈",
+        "severe": "严重",
+        "critical": "危急",
+    }
+    _TIME_ZH = {
+        "morning":   "晨（Morning）",
+        "afternoon": "午（Afternoon）",
+        "night":     "夜（Night）",
+        "evening":   "夕（Evening）",
+    }
+
     def __init__(self, data: dict, lang: str = "en", **kwargs):
         super().__init__(**kwargs)
         self.data = data
         self.lang = lang
+
+    def _localize(self, text: str, table: dict) -> str:
+        """Look up text (case-insensitive) in table; return original if not found."""
+        if self.lang != "zh":
+            return text
+        return table.get(text.lower().strip(), text)
+
+    def _localize_effect(self, effect_str: str) -> str:
+        """Translate a status effect string like 'Signal Sensitivity — faint'."""
+        if self.lang != "zh":
+            return effect_str
+        # Handle both "Name — intensity" and "Name - intensity" and "Name (intensity)"
+        for sep in (" — ", " - ", "（", "("):
+            if sep in effect_str:
+                idx = effect_str.index(sep)
+                name_part = effect_str[:idx].strip()
+                intensity_part = effect_str[idx + len(sep):].strip().rstrip("）)")
+                name_zh = self._EFFECT_NAME_ZH.get(name_part.lower(), name_part)
+                intensity_zh = self._INTENSITY_ZH.get(intensity_part.lower(), intensity_part)
+                return f"{name_zh} — {intensity_zh}"
+        # Plain name, no intensity
+        return self._EFFECT_NAME_ZH.get(effect_str.lower().strip(), effect_str)
 
     def render(self) -> Group:
         L = LABELS[self.lang]
@@ -1341,7 +1473,7 @@ class IdentityPanel(Static):
 
         bg_line = Text()
         bg_line.append(f"  {L['background']}: ", style=CLR_MUTED)
-        bg_line.append(player.get("background", "???"), style=CLR_TEXT)
+        bg_line.append(self._localize(player.get("background", "???"), self._BG_ZH), style=CLR_TEXT)
         parts.append(bg_line)
 
         parts.append(Text(""))
@@ -1370,16 +1502,20 @@ class IdentityPanel(Static):
         # Neural Implant
         implant = player.get("neural_implant", "Dormant")
         implant_color = CLR_MUTED
-        if "active" in implant.lower():
+        implant_low = implant.lower()
+        if "active" in implant_low or "激活" in implant or "活跃" in implant:
             implant_color = CLR_GREEN
-        elif "overloaded" in implant.lower():
+        elif "overloaded" in implant_low or "过载" in implant or "超载" in implant:
             implant_color = CLR_DANGER
-        elif "resonating" in implant.lower():
+        elif "resonating" in implant_low or "共鸣" in implant or "共振" in implant:
             implant_color = CLR_ACCENT
+        elif "damaged" in implant_low or "损坏" in implant or "故障" in implant:
+            implant_color = CLR_WARNING
 
+        implant_display = self._localize(implant, self._IMPLANT_ZH)
         implant_line = Text()
         implant_line.append(f"  {L['neural_implant']}: ", style=CLR_MUTED)
-        implant_line.append(implant, style=f"bold {implant_color}")
+        implant_line.append(implant_display, style=f"bold {implant_color}")
         parts.append(implant_line)
 
         # Disguise
@@ -1400,14 +1536,22 @@ class IdentityPanel(Static):
         turn_line.append(str(player.get("turn", 0)), style=CLR_TEXT)
         turn_line.append(f"    {L['time']}: ", style=CLR_MUTED)
         time_str = player.get("time", "")
-        time_icon = "\u2600"
-        if "night" in time_str.lower() or "\u591c" in time_str:
+        time_lower = time_str.lower()
+        if "night" in time_lower or "\u591c" in time_str:
             time_icon = "\U0001f319"
-        elif "afternoon" in time_str.lower() or "\u5348" in time_str:
+        elif "afternoon" in time_lower or "\u5348" in time_str:
             time_icon = "\u2600\ufe0f"
-        elif "morning" in time_str.lower() or "\u6668" in time_str:
+        elif "morning" in time_lower or "\u6668" in time_str:
             time_icon = "\U0001f305"
-        turn_line.append(f"{time_icon} {time_str}", style=CLR_PRIMARY)
+        elif "evening" in time_lower or "\u5915" in time_str:
+            time_icon = "\U0001f307"
+        else:
+            time_icon = "\u2600"
+        if self.lang == "zh":
+            time_display = self._TIME_ZH.get(time_lower, time_str)
+        else:
+            time_display = time_str
+        turn_line.append(f"{time_icon} {time_display}", style=CLR_PRIMARY)
         parts.append(turn_line)
 
         parts.append(Text(""))
@@ -1421,7 +1565,7 @@ class IdentityPanel(Static):
             for eff in effects:
                 eff_line = Text()
                 eff_line.append(f"    \u25b8 ", style=CLR_ACCENT)
-                eff_line.append(eff, style=CLR_TEXT)
+                eff_line.append(self._localize_effect(eff), style=CLR_TEXT)
                 parts.append(eff_line)
 
         return Group(*parts)
@@ -1725,11 +1869,9 @@ class InventoryPanel(Static):
                 slot_num = 0
             item_by_slot[slot_num] = item
 
-        # 6 slots in 2 rows of 3
-        for row in range(2):
-            row_parts = []
-            for col in range(3):
-                slot_num = row * 3 + col + 1
+        _W = 30  # content width for item text
+        # 6 slots rendered vertically
+        for slot_num in range(1, 7):
                 item = item_by_slot.get(slot_num)
 
                 if item:
@@ -1737,42 +1879,36 @@ class InventoryPanel(Static):
                     icon = ITEM_ICONS.get(item_type, "\u25a0")
                     name = item.get("name", "???")
                     desc = item.get("description", "")
+                    type_display = item_type.replace("_", " ").upper()
 
-                    # Slot box with item
+                    # Slot box — no right border to avoid emoji-width misalignment
                     slot_text = Text()
                     slot_text.append(f"  \u250c\u2500\u2500 {L['slot']} {slot_num} ", style=CLR_PRIMARY)
-                    slot_text.append("\u2500" * 18 + "\u2510\n", style=CLR_PRIMARY)
+                    slot_text.append("\u2500" * (_W - 6) + "\n", style=CLR_PRIMARY)
                     slot_text.append(f"  \u2502 {icon} ", style=CLR_PRIMARY)
-                    slot_text.append(f"{name[:20]:<20s}", style=f"bold {CLR_TEXT}")
-                    slot_text.append(" \u2502\n", style=CLR_PRIMARY)
+                    slot_text.append(_cjk_fit(name, _W), style=f"bold {CLR_TEXT}")
+                    slot_text.append("\n", style="")
                     slot_text.append(f"  \u2502   ", style=CLR_PRIMARY)
-                    type_display = item_type.replace("_", " ").upper()
-                    slot_text.append(f"{type_display[:20]:<20s}", style=CLR_MUTED)
-                    slot_text.append(" \u2502\n", style=CLR_PRIMARY)
+                    slot_text.append(_cjk_fit(type_display, _W), style=CLR_MUTED)
+                    slot_text.append("\n", style="")
                     slot_text.append(f"  \u2502   ", style=CLR_PRIMARY)
-                    slot_text.append(f"{desc[:20]:<20s}", style=CLR_DIM)
-                    slot_text.append(" \u2502\n", style=CLR_PRIMARY)
-                    slot_text.append(f"  \u2514" + "\u2500" * 24 + "\u2518", style=CLR_PRIMARY)
+                    slot_text.append(_cjk_fit(desc, _W), style=CLR_DIM)
+                    slot_text.append("\n", style="")
+                    slot_text.append(f"  \u2514" + "\u2500" * (_W + 4), style=CLR_PRIMARY)
                     parts.append(slot_text)
                 else:
                     # Empty slot
+                    empty_label = L["empty"]
                     slot_text = Text()
                     slot_text.append(f"  \u250c\u2500\u2500 {L['slot']} {slot_num} ", style=CLR_DIM)
-                    slot_text.append("\u2500" * 18 + "\u2510\n", style=CLR_DIM)
-                    slot_text.append(f"  \u2502", style=CLR_DIM)
-                    slot_text.append(f"{'':24s}", style="")
-                    slot_text.append("\u2502\n", style=CLR_DIM)
-                    slot_text.append(f"  \u2502", style=CLR_DIM)
-                    empty_label = L["empty"]
-                    slot_text.append(f"    {empty_label:^16s}    ", style=CLR_DIM)
-                    slot_text.append("\u2502\n", style=CLR_DIM)
-                    slot_text.append(f"  \u2502", style=CLR_DIM)
-                    slot_text.append(f"{'':24s}", style="")
-                    slot_text.append("\u2502\n", style=CLR_DIM)
-                    slot_text.append(f"  \u2514" + "\u2500" * 24 + "\u2518", style=CLR_DIM)
+                    slot_text.append("\u2500" * (_W - 6) + "\n", style=CLR_DIM)
+                    slot_text.append(f"  \u2502\n", style=CLR_DIM)
+                    slot_text.append(f"  \u2502   ", style=CLR_DIM)
+                    slot_text.append(_cjk_fit(empty_label, _W), style=CLR_DIM)
+                    slot_text.append("\n", style="")
+                    slot_text.append(f"  \u2502\n", style=CLR_DIM)
+                    slot_text.append(f"  \u2514" + "\u2500" * (_W + 4), style=CLR_DIM)
                     parts.append(slot_text)
-
-            parts.append(Text(""))
 
         return Group(*parts)
 
@@ -1886,49 +2022,81 @@ class WorldPanel(Static):
             parts.append(Text(f"\n  {L['no_data']}", style=CLR_DIM))
             return Group(*parts)
 
-        # NEXUS Alert - BIG bar with gradient
+        _alert_status_map = {
+            "calm": L.get("alert_calm", "CALM"),
+            "watchful": L.get("alert_watchful", "WATCHFUL"),
+            "alert": L.get("alert_alert", "ALERT"),
+            "manhunt": L.get("alert_manhunt", "MANHUNT"),
+            "lockdown": L.get("alert_lockdown", "LOCKDOWN"),
+        }
+        _decay_status_map = {
+            "stable": L.get("decay_stable", "STABLE"),
+            "fading": L.get("decay_fading", "FADING"),
+            "critical": L.get("decay_critical", "CRITICAL"),
+            "terminal": L.get("decay_terminal", "TERMINAL"),
+        }
+        _district_status_map = {
+            "open": L.get("status_open", "open"),
+            "locked": L.get("status_locked", "locked"),
+            "restricted": L.get("status_restricted", "restricted"),
+            "hidden": L.get("status_hidden", "hidden"),
+        }
+
+        # NEXUS Alert — only shown when > 0 (player is unaware at 0%)
         alert = world.get("nexus_alert", 0)
-        alert_status = world.get("alert_status", "")
+        if alert > 0:
+            alert_status_raw = world.get("alert_status", "").lower()
+            alert_status_zh = world.get("alert_status_zh", "")
+            if self.lang == "zh" and alert_status_zh:
+                alert_status_display = alert_status_zh.upper()
+            else:
+                alert_status_display = _alert_status_map.get(alert_status_raw, alert_status_raw.upper())
 
-        alert_header = Text()
-        alert_header.append(f"\n  \u26a0 {L['nexus_alert']}", style=f"bold {CLR_DANGER}")
-        parts.append(alert_header)
+            alert_header = Text()
+            alert_header.append(f"\n  \u26a0 {L['nexus_alert']}", style=f"bold {CLR_DANGER}")
+            parts.append(alert_header)
 
-        alert_bar = Text()
-        alert_bar.append("  ")
-        alert_bar.append_text(bar(alert, 100, width=40, gradient=True))
-        alert_bar.append(f" {alert}%", style=f"bold {CLR_DANGER if alert > 60 else CLR_WARNING if alert > 30 else CLR_GREEN}")
-        parts.append(alert_bar)
+            alert_bar = Text()
+            alert_bar.append("  ")
+            alert_bar.append_text(bar(alert, 100, width=40, gradient=True))
+            alert_bar.append(f" {alert}%", style=f"bold {CLR_DANGER if alert > 60 else CLR_WARNING if alert > 30 else CLR_GREEN}")
+            parts.append(alert_bar)
 
-        if alert_status:
-            status_line = Text()
-            status_line.append(f"  Status: ", style=CLR_MUTED)
-            status_line.append(alert_status.upper(), style=f"bold {CLR_DANGER if alert > 60 else CLR_WARNING}")
-            parts.append(status_line)
+            if alert_status_display:
+                status_line = Text()
+                status_line.append(f"  Status: ", style=CLR_MUTED)
+                status_line.append(alert_status_display, style=f"bold {CLR_DANGER if alert > 60 else CLR_WARNING}")
+                parts.append(status_line)
 
-        parts.append(Text(""))
+            parts.append(Text(""))
 
-        # Fragment Decay - magenta bar
+        # Fragment Decay — only shown when > 0 (player is unaware at 0%)
         decay = world.get("fragment_decay", 0)
-        fragment_status = world.get("fragment_status", "")
+        if decay > 0:
+            fragment_status_raw = world.get("fragment_status", "").lower()
+            fragment_status_zh = world.get("fragment_status_zh", "")
+            if self.lang == "zh" and fragment_status_zh:
+                fragment_status_display = fragment_status_zh.upper()
+            else:
+                fragment_status_display = _decay_status_map.get(fragment_status_raw, fragment_status_raw.upper())
 
-        decay_header = Text()
-        decay_header.append(f"  \u25c6 {L['fragment_decay']}", style=f"bold {CLR_ACCENT}")
-        parts.append(decay_header)
+            decay_header = Text()
+            decay_header.append(f"  \u25c6 {L['fragment_decay']}", style=f"bold {CLR_ACCENT}")
+            parts.append(decay_header)
 
-        decay_bar = Text()
-        decay_bar.append("  ")
-        decay_bar.append_text(bar(decay, 100, width=40, fill_style=CLR_ACCENT, empty_style=CLR_DIM))
-        decay_bar.append(f" {decay}%", style=f"bold {CLR_ACCENT}")
-        parts.append(decay_bar)
+            decay_bar = Text()
+            decay_bar.append("  ")
+            decay_bar.append_text(bar(decay, 100, width=40, fill_style=CLR_ACCENT, empty_style=CLR_DIM))
+            decay_bar.append(f" {decay}%", style=f"bold {CLR_ACCENT}")
+            parts.append(decay_bar)
 
-        if fragment_status:
-            fs_line = Text()
-            fs_line.append(f"  Status: ", style=CLR_MUTED)
-            fs_line.append(fragment_status.upper(), style=f"bold {CLR_ACCENT}")
-            parts.append(fs_line)
+            if fragment_status_display:
+                fs_line = Text()
+                fs_line.append(f"  Status: ", style=CLR_MUTED)
+                fs_line.append(fragment_status_display, style=f"bold {CLR_ACCENT}")
+                parts.append(fs_line)
 
-        parts.append(Text(""))
+            parts.append(Text(""))
 
         # District Access Table
         districts = world.get("districts", [])
@@ -1938,16 +2106,21 @@ class WorldPanel(Static):
             parts.append(dist_header)
 
             for d in districts:
-                status = d.get("status", "").strip("[]").lower()
-                status_color = CLR_GREEN if status == "open" else CLR_DANGER if status == "locked" else CLR_WARNING
-                status_icon = "\u25c6" if status == "open" else "\u25cb" if status == "locked" else "\u25d4"
+                raw_status = d.get("status", "").strip("[]").lower()
+                status_display = _district_status_map.get(raw_status, raw_status)
+                status_color = CLR_GREEN if raw_status == "open" else CLR_DANGER if raw_status == "locked" else CLR_WARNING
+                status_icon = "\u25c6" if raw_status == "open" else "\u25cb" if raw_status == "locked" else "\u25d4"
 
                 d_line = Text()
                 d_line.append(f"    {status_icon} ", style=status_color)
-                d_line.append(f"{d.get('name', '')}", style=CLR_TEXT)
-                if d.get("chinese"):
-                    d_line.append(f" ({d['chinese']})", style=CLR_DIM)
-                d_line.append(f" [{status}]", style=status_color)
+                if self.lang == "zh" and d.get("chinese"):
+                    d_line.append(f"{d['chinese']}", style=CLR_TEXT)
+                    d_line.append(f" ({d.get('name', '')})", style=CLR_DIM)
+                else:
+                    d_line.append(f"{d.get('name', '')}", style=CLR_TEXT)
+                    if d.get("chinese"):
+                        d_line.append(f" ({d['chinese']})", style=CLR_DIM)
+                d_line.append(f" [{status_display}]", style=status_color)
                 parts.append(d_line)
 
             parts.append(Text(""))
@@ -1955,10 +2128,30 @@ class WorldPanel(Static):
         # Period
         period = world.get("period", "")
         if period:
+            _PERIOD_ZH = {
+                "morning": "晨（Morning）",
+                "afternoon": "午（Afternoon）",
+                "night": "夜（Night）",
+                "evening": "夕（Evening）",
+            }
             period_line = Text()
             period_line.append(f"  {L['period']}: ", style=CLR_MUTED)
-            time_icon = "\U0001f319" if "night" in period.lower() or "\u591c" in period else "\u2600"
-            period_line.append(f"{time_icon} {period}", style=CLR_PRIMARY)
+            period_low = period.lower()
+            if "night" in period_low or "\u591c" in period:
+                time_icon = "\U0001f319"
+            elif "evening" in period_low or "\u5915" in period:
+                time_icon = "\U0001f307"
+            elif "afternoon" in period_low or "\u5348" in period:
+                time_icon = "\u2600\ufe0f"
+            elif "morning" in period_low or "\u6668" in period:
+                time_icon = "\U0001f305"
+            else:
+                time_icon = "\u2600"
+            if self.lang == "zh":
+                period_display = _PERIOD_ZH.get(period_low, period)
+            else:
+                period_display = period
+            period_line.append(f"{time_icon} {period_display}", style=CLR_PRIMARY)
             parts.append(period_line)
 
         # Global Events
@@ -2074,6 +2267,7 @@ class ToolsPanel(Static):
         super().__init__(**kwargs)
         self.data = data
         self.lang = lang
+        self.last_result: str = ""
 
     def render(self) -> Group:
         L = LABELS[self.lang]
@@ -2084,48 +2278,57 @@ class ToolsPanel(Static):
         parts.append(title)
         parts.append(Text(""))
 
-        # Tool buttons/labels
+        # Tool cards: (label, icon, color, desc_key, cmd_key)
         tools_info = [
-            (L["tool_dice"], "\U0001f3b2", CLR_PRIMARY,
-             "Roll dice for skill checks and random events"),
-            (L["tool_cipher"], "\U0001f510", CLR_GREEN,
-             "Decode encrypted data chips and messages"),
-            (L["tool_signal"], "\U0001f4e1", CLR_ACCENT,
-             "Scan for Signal traces and Fragment resonance"),
-            (L["tool_map"], "\U0001f5fa", CLR_WARNING,
-             "View district map and navigation routes"),
+            (L["tool_dice"],   "\U0001f3b2", CLR_PRIMARY, "tool_desc_dice",   "tool_cmd_dice"),
+            (L["tool_cipher"], "\U0001f510", CLR_GREEN,   "tool_desc_cipher", "tool_cmd_cipher"),
+            (L["tool_signal"], "\U0001f4e1", CLR_ACCENT,  "tool_desc_signal", "tool_cmd_signal"),
+            (L["tool_map"],    "\U0001f5fa", CLR_WARNING, "tool_desc_map",    "tool_cmd_glitch"),
         ]
 
-        for tool_name, icon, color, desc in tools_info:
-            tool_line = Text()
-            tool_line.append(f"  \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510", style=color)
-            parts.append(tool_line)
+        _W = 30  # inner width of tool card (no right border to avoid emoji-width misalignment)
+        for tool_name, icon, color, desc_key, cmd_key in tools_info:
+            desc = L.get(desc_key, "")
+            cmd  = L.get(cmd_key, "")
+
+            top = Text()
+            top.append(f"  \u250c" + "\u2500" * _W, style=color)
+            parts.append(top)
 
             name_line = Text()
             name_line.append(f"  \u2502 {icon} ", style=color)
-            name_line.append(f"{tool_name:<24s}", style=f"bold {color}")
-            name_line.append(" \u2502", style=color)
+            name_line.append(_cjk_fit(tool_name, _W - 3), style=f"bold {color}")
             parts.append(name_line)
 
             desc_line = Text()
             desc_line.append(f"  \u2502   ", style=color)
-            desc_line.append(f"{desc[:24]:<24s}", style=CLR_DIM)
-            desc_line.append(" \u2502", style=color)
+            desc_line.append(_cjk_fit(desc, _W - 1), style=CLR_DIM)
             parts.append(desc_line)
 
-            bottom_line = Text()
-            bottom_line.append(f"  \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518", style=color)
-            parts.append(bottom_line)
+            cmd_line = Text()
+            cmd_line.append(f"  \u2502   ", style=color)
+            cmd_line.append(_cjk_fit(f"> {cmd}", _W - 1), style=f"italic {color}")
+            parts.append(cmd_line)
+
+            bottom = Text()
+            bottom.append(f"  \u2514" + "\u2500" * _W, style=color)
+            parts.append(bottom)
             parts.append(Text(""))
 
-        # Results area placeholder
-        parts.append(Text(""))
+        # Results area
         results_header = Text()
-        results_header.append("  Results:", style=f"bold {CLR_MUTED}")
+        results_header.append(f"  {L.get('tool_results', 'Results')}:", style=f"bold {CLR_MUTED}")
         parts.append(results_header)
-        results_line = Text()
-        results_line.append("  Enter a tool command below (d=focus input)", style=CLR_DIM)
-        parts.append(results_line)
+
+        if self.last_result:
+            for line in self.last_result.split("\n"):
+                r_line = Text()
+                r_line.append(f"  {line}", style=CLR_TEXT)
+                parts.append(r_line)
+        else:
+            hint_line = Text()
+            hint_line.append(f"  {L.get('tool_hint', 'd=focus input')}", style=CLR_DIM)
+            parts.append(hint_line)
 
         return Group(*parts)
 
